@@ -1,5 +1,5 @@
 /*
-Copyright 2018 The Kubernetes Authors.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,11 +14,4 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package prometheusclientgo
-
-// Provided metrics needing adapting
-import (
-	_ "k8s.io/kubernetes/pkg/client/metrics/prometheus"              // for client metric registration
-	_ "k8s.io/kubernetes/pkg/util/prometheusclientgo/leaderelection" // for leader election metric registration
-	_ "k8s.io/kubernetes/pkg/util/workqueue/prometheus"              // for workqueue metric registration
-)
+package scheme // import "k8s.io/apimachinery/pkg/apis/meta/internalversion/scheme"

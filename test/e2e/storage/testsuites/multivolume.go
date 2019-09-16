@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	"k8s.io/kubernetes/test/e2e/storage/testpatterns"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
@@ -162,6 +161,9 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		defer cleanup()
 
 		// Check different-node test requirement
+		if l.driver.GetDriverInfo().Capabilities[CapSingleNodeVolume] {
+			framework.Skipf("Driver %s only supports %v -- skipping", l.driver.GetDriverInfo().Name, CapSingleNodeVolume)
+		}
 		nodes := framework.GetReadySchedulableNodesOrDie(l.cs)
 		if len(nodes.Items) < 2 {
 			framework.Skipf("Number of available nodes is less than 2 - skipping")
@@ -242,6 +244,9 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		defer cleanup()
 
 		// Check different-node test requirement
+		if l.driver.GetDriverInfo().Capabilities[CapSingleNodeVolume] {
+			framework.Skipf("Driver %s only supports %v -- skipping", l.driver.GetDriverInfo().Name, CapSingleNodeVolume)
+		}
 		nodes := framework.GetReadySchedulableNodesOrDie(l.cs)
 		if len(nodes.Items) < 2 {
 			framework.Skipf("Number of available nodes is less than 2 - skipping")
@@ -452,7 +457,7 @@ func TestConcurrentAccessToSingleVolume(f *framework.Framework, cs clientset.Int
 
 	// Delete the last pod and remove from slice of pods
 	if len(pods) < 2 {
-		e2elog.Failf("Number of pods shouldn't be less than 2, but got %d", len(pods))
+		framework.Failf("Number of pods shouldn't be less than 2, but got %d", len(pods))
 	}
 	lastPod := pods[len(pods)-1]
 	framework.ExpectNoError(e2epod.DeletePodWithWait(cs, lastPod))

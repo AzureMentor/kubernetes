@@ -47,7 +47,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	"k8s.io/kubernetes/test/e2e/storage/testpatterns"
 	"k8s.io/kubernetes/test/e2e/storage/testsuites"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
@@ -97,6 +96,7 @@ func InitHostPathCSIDriver() testsuites.TestDriver {
 		testsuites.CapBlock:               true,
 		testsuites.CapPVCDataSource:       true,
 		testsuites.CapControllerExpansion: true,
+		testsuites.CapSingleNodeVolume:    true,
 	}
 	return initHostPathCSIDriver("csi-hostpath",
 		capabilities,
@@ -187,7 +187,7 @@ func (h *hostpathCSIDriver) PrepareTest(f *framework.Framework) (*testsuites.Per
 	},
 		h.manifests...)
 	if err != nil {
-		e2elog.Failf("deploying %s driver: %v", h.driverInfo.Name, err)
+		framework.Failf("deploying %s driver: %v", h.driverInfo.Name, err)
 	}
 
 	return config, func() {
@@ -333,7 +333,7 @@ func (m *mockCSIDriver) PrepareTest(f *framework.Framework) (*testsuites.PerTest
 	},
 		m.manifests...)
 	if err != nil {
-		e2elog.Failf("deploying csi mock driver: %v", err)
+		framework.Failf("deploying csi mock driver: %v", err)
 	}
 
 	return config, func() {
@@ -346,7 +346,7 @@ func (m *mockCSIDriver) PrepareTest(f *framework.Framework) (*testsuites.PerTest
 // InitHostPathV0CSIDriver returns a variant of hostpathCSIDriver with different manifests.
 func InitHostPathV0CSIDriver() testsuites.TestDriver {
 	return initHostPathCSIDriver("csi-hostpath-v0",
-		map[testsuites.Capability]bool{testsuites.CapPersistence: true, testsuites.CapMultiPODs: true},
+		map[testsuites.Capability]bool{testsuites.CapPersistence: true, testsuites.CapMultiPODs: true, testsuites.CapSingleNodeVolume: true},
 		nil, /* no volume attributes -> no ephemeral volume testing */
 		// Using the current set of rbac.yaml files is problematic here because they don't
 		// match the version of the rules that were written for the releases of external-attacher
@@ -456,7 +456,7 @@ func (g *gcePDCSIDriver) PrepareTest(f *framework.Framework) (*testsuites.PerTes
 
 	cleanup, err := f.CreateFromManifests(nil, manifests...)
 	if err != nil {
-		e2elog.Failf("deploying csi gce-pd driver: %v", err)
+		framework.Failf("deploying csi gce-pd driver: %v", err)
 	}
 
 	return &testsuites.PerTestConfig{

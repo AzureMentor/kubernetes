@@ -28,8 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2essh "k8s.io/kubernetes/test/e2e/framework/ssh"
 	"k8s.io/kubernetes/test/images/agnhost/net/nat"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -212,7 +212,7 @@ var _ = SIGDescribe("Network", func() {
 		const epsilonSeconds = 60
 		const expectedTimeoutSeconds = 60 * 60
 
-		e2elog.Logf("conntrack entry timeout was: %v, expected: %v",
+		framework.Logf("conntrack entry timeout was: %v, expected: %v",
 			timeoutSeconds, expectedTimeoutSeconds)
 
 		gomega.Expect(math.Abs(float64(timeoutSeconds - expectedTimeoutSeconds))).Should(
@@ -264,6 +264,9 @@ var _ = SIGDescribe("Network", func() {
 			},
 		}
 		_, err := fr.ClientSet.CoreV1().Pods(fr.Namespace.Name).Create(serverPod)
+		framework.ExpectNoError(err)
+
+		err = e2epod.WaitForPodsRunningReady(fr.ClientSet, fr.Namespace.Name, 1, 0, framework.PodReadyBeforeTimeout, map[string]string{})
 		framework.ExpectNoError(err)
 
 		ginkgo.By("Server pod created")
