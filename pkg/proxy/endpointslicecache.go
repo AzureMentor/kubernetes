@@ -145,8 +145,11 @@ func (cache *EndpointSliceCache) endpointInfoByServicePort(serviceNN types.Names
 				continue
 			}
 
-			svcPortName := ServicePortName{NamespacedName: serviceNN}
-			svcPortName.Port = *port.Name
+			svcPortName := ServicePortName{
+				NamespacedName: serviceNN,
+				Port:           *port.Name,
+				Protocol:       *port.Protocol,
+			}
 
 			endpointInfoBySP[svcPortName] = cache.addEndpointsByIP(serviceNN, int(*port.Port), endpointInfoBySP[svcPortName], sliceInfo.Endpoints)
 		}
@@ -249,5 +252,5 @@ func (e byIP) Swap(i, j int) {
 	e[i], e[j] = e[j], e[i]
 }
 func (e byIP) Less(i, j int) bool {
-	return e[i].IP() < e[j].IP()
+	return e[i].String() < e[j].String()
 }

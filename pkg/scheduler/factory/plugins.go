@@ -28,6 +28,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
 	"k8s.io/kubernetes/pkg/scheduler/algorithm/priorities"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/api"
+	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 	"k8s.io/kubernetes/pkg/scheduler/volumebinder"
 
 	"k8s.io/klog"
@@ -218,7 +219,6 @@ func InsertPredicateKeyToAlgorithmProviderMap(key string) {
 	for _, provider := range algorithmProviderMap {
 		provider.FitPredicateKeys.Insert(key)
 	}
-	return
 }
 
 // InsertPriorityKeyToAlgorithmProviderMap inserts a priority function to all algorithmProviders which are in algorithmProviderMap.
@@ -229,7 +229,6 @@ func InsertPriorityKeyToAlgorithmProviderMap(key string) {
 	for _, provider := range algorithmProviderMap {
 		provider.PriorityFunctionKeys.Insert(key)
 	}
-	return
 }
 
 // RegisterMandatoryFitPredicate registers a fit predicate with the algorithm registry, the predicate is used by
@@ -551,11 +550,11 @@ func getPriorityFunctionConfigs(names sets.String, args PluginFactoryArgs) ([]pr
 func validateSelectedConfigs(configs []priorities.PriorityConfig) error {
 	var totalPriority int64
 	for _, config := range configs {
-		// Checks totalPriority against MaxTotalPriority to avoid overflow
-		if config.Weight*schedulerapi.MaxPriority > schedulerapi.MaxTotalPriority-totalPriority {
+		// Checks totalPriority against MaxTotalScore to avoid overflow
+		if config.Weight*framework.MaxNodeScore > framework.MaxTotalScore-totalPriority {
 			return fmt.Errorf("total priority of priority functions has overflown")
 		}
-		totalPriority += config.Weight * schedulerapi.MaxPriority
+		totalPriority += config.Weight * framework.MaxNodeScore
 	}
 	return nil
 }

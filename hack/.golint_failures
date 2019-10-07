@@ -25,7 +25,6 @@ pkg/apis/batch/validation
 pkg/apis/certificates
 pkg/apis/certificates/v1beta1
 pkg/apis/certificates/validation
-pkg/apis/core
 pkg/apis/core/helper/qos
 pkg/apis/core/v1
 pkg/apis/core/v1/helper
@@ -131,7 +130,6 @@ pkg/kubelet/lifecycle
 pkg/kubelet/pluginmanager/pluginwatcher
 pkg/kubelet/pod/testing
 pkg/kubelet/preemption
-pkg/kubelet/qos
 pkg/kubelet/remote
 pkg/kubelet/stats
 pkg/kubelet/status
@@ -139,7 +137,6 @@ pkg/kubelet/status/testing
 pkg/kubelet/sysctl
 pkg/kubelet/types
 pkg/kubemark
-pkg/master
 pkg/master/controller/crdregistration
 pkg/master/tunneler
 pkg/proxy/apis/config
@@ -232,7 +229,6 @@ pkg/serviceaccount
 pkg/ssh
 pkg/util/config
 pkg/util/ebtables
-pkg/util/env
 pkg/util/goroutinemap/exponentialbackoff
 pkg/util/iptables
 pkg/util/iptables/testing
@@ -245,7 +241,6 @@ pkg/util/rlimit
 pkg/util/selinux
 pkg/util/sysctl/testing
 pkg/util/taints
-pkg/version/verflag
 pkg/volume
 pkg/volume/azure_dd
 pkg/volume/azure_file
@@ -489,6 +484,7 @@ staging/src/k8s.io/code-generator/cmd/lister-gen/generators
 staging/src/k8s.io/component-base/cli/flag
 staging/src/k8s.io/component-base/config/v1alpha1
 staging/src/k8s.io/component-base/featuregate
+staging/src/k8s.io/component-base/version/verflag
 staging/src/k8s.io/cri-api/pkg/apis/testing
 staging/src/k8s.io/kube-aggregator/pkg/apis/apiregistration/v1
 staging/src/k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1

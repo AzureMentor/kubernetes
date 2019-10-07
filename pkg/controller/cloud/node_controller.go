@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	clientretry "k8s.io/client-go/util/retry"
 	cloudprovider "k8s.io/cloud-provider"
+	cloudnodeutil "k8s.io/cloud-provider/node/helpers"
 	"k8s.io/klog"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/api"
@@ -160,6 +161,7 @@ func (cnc *CloudNodeController) updateNodeAddress(node *v1.Node, instances cloud
 	for i := range nodeAddresses {
 		if nodeAddresses[i].Type == v1.NodeHostName {
 			hostnameExists = true
+			break
 		}
 	}
 	// If hostname was not present in cloud provided addresses, use the hostname
@@ -233,7 +235,7 @@ func (cnc *CloudNodeController) initializeNode(node *v1.Node) {
 		// Since there are node taints, do we still need this?
 		// This condition marks the node as unusable until routes are initialized in the cloud provider
 		if cnc.cloud.ProviderName() == "gce" {
-			if err := nodeutil.SetNodeCondition(cnc.kubeClient, types.NodeName(node.Name), v1.NodeCondition{
+			if err := cloudnodeutil.SetNodeCondition(cnc.kubeClient, types.NodeName(node.Name), v1.NodeCondition{
 				Type:               v1.NodeNetworkUnavailable,
 				Status:             v1.ConditionTrue,
 				Reason:             "NoRouteCreated",

@@ -17,7 +17,6 @@ limitations under the License.
 package factory
 
 import (
-	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,44 +46,6 @@ func TestAlgorithmNameValidation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if validName.MatchString(name) {
 				t.Errorf("should be an invalid algorithm name but is valid.")
-			}
-		})
-	}
-}
-
-func TestValidatePriorityConfigOverFlow(t *testing.T) {
-	tests := []struct {
-		description string
-		configs     []priorities.PriorityConfig
-		expected    bool
-	}{
-		{
-			description: "one of the weights is MaxInt64",
-			configs:     []priorities.PriorityConfig{{Weight: math.MaxInt64}, {Weight: 5}},
-			expected:    true,
-		},
-		{
-			description: "after multiplication with MaxPriority the weight is larger than MaxWeight",
-			configs:     []priorities.PriorityConfig{{Weight: math.MaxInt64/api.MaxPriority + api.MaxPriority}, {Weight: 5}},
-			expected:    true,
-		},
-		{
-			description: "normal weights",
-			configs:     []priorities.PriorityConfig{{Weight: 10000}, {Weight: 5}},
-			expected:    false,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			err := validateSelectedConfigs(test.configs)
-			if test.expected {
-				if err == nil {
-					t.Errorf("Expected Overflow")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Did not expect an overflow")
-				}
 			}
 		})
 	}

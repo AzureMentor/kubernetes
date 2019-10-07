@@ -45,7 +45,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/klog"
-	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/algorithm"
 	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
@@ -54,6 +53,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/api/validation"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/core"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	cachedebugger "k8s.io/kubernetes/pkg/scheduler/internal/cache/debugger"
@@ -71,12 +71,6 @@ type Binder interface {
 	Bind(binding *v1.Binding) error
 }
 
-// PodConditionUpdater updates the condition of a pod based on the passed
-// PodCondition
-type PodConditionUpdater interface {
-	Update(pod *v1.Pod, podCondition *v1.PodCondition) error
-}
-
 // Config is an implementation of the Scheduler's configured input data.
 // TODO over time we should make this struct a hidden implementation detail of the scheduler.
 type Config struct {
@@ -84,10 +78,6 @@ type Config struct {
 
 	Algorithm core.ScheduleAlgorithm
 	GetBinder func(pod *v1.Pod) Binder
-	// PodConditionUpdater is used only in case of scheduling errors. If we succeed
-	// with scheduling, PodScheduled condition will be updated in apiserver in /bind
-	// handler so that binding and setting PodCondition it is atomic.
-	PodConditionUpdater PodConditionUpdater
 	// PodPreemptor is used to evict pods and update 'NominatedNode' field of
 	// the preemptor pod.
 	PodPreemptor PodPreemptor
@@ -122,6 +112,10 @@ type Config struct {
 
 	// SchedulingQueue holds pods to be scheduled
 	SchedulingQueue internalqueue.SchedulingQueue
+
+	// The final configuration of the framework.
+	Plugins      config.Plugins
+	PluginConfig []config.PluginConfig
 }
 
 // PodPreemptor has methods needed to delete a pod and to update 'NominatedPod'
@@ -155,8 +149,10 @@ type Configurator struct {
 	storageClassLister storagelistersv1.StorageClassLister
 	// a means to list all CSINodes
 	csiNodeLister storagelistersv1beta1.CSINodeLister
-	// framework has a set of plugins and the context used for running them.
-	framework framework.Framework
+	// a means to list all Nodes
+	nodeLister corelisters.NodeLister
+	// a means to list all Pods
+	podLister corelisters.PodLister
 
 	// Close this to stop all reflectors
 	StopEverything <-chan struct{}
@@ -183,10 +179,14 @@ type Configurator struct {
 	percentageOfNodesToScore int32
 
 	bindTimeoutSeconds int64
-	// queue for pods that need scheduling
-	podQueue internalqueue.SchedulingQueue
 
 	enableNonPreempting bool
+
+	// framework configuration arguments.
+	registry                     framework.Registry
+	plugins                      *config.Plugins
+	pluginConfig                 []config.PluginConfig
+	pluginConfigProducerRegistry *plugins.ConfigProducerRegistry
 }
 
 // ConfigFactoryArgs is a set arguments passed to NewConfigFactory.
@@ -211,6 +211,7 @@ type ConfigFactoryArgs struct {
 	Registry                       framework.Registry
 	Plugins                        *config.Plugins
 	PluginConfig                   []config.PluginConfig
+	PluginConfigProducerRegistry   *plugins.ConfigProducerRegistry
 }
 
 // NewConfigFactory initializes the default implementation of a Configurator. To encourage eventual privatization of the struct type, we only
@@ -221,11 +222,6 @@ func NewConfigFactory(args *ConfigFactoryArgs) *Configurator {
 		stopEverything = wait.NeverStop
 	}
 	schedulerCache := internalcache.New(30*time.Second, stopEverything)
-
-	framework, err := framework.NewFramework(args.Registry, args.Plugins, args.PluginConfig)
-	if err != nil {
-		klog.Fatalf("error initializing the scheduling framework: %v", err)
-	}
 
 	// storageClassInformer is only enabled through VolumeScheduling feature gate
 	var storageClassLister storagelistersv1.StorageClassLister
@@ -240,7 +236,6 @@ func NewConfigFactory(args *ConfigFactoryArgs) *Configurator {
 
 	c := &Configurator{
 		client:                         args.Client,
-		podQueue:                       internalqueue.NewSchedulingQueue(stopEverything, framework),
 		pVLister:                       args.PvInformer.Lister(),
 		pVCLister:                      args.PvcInformer.Lister(),
 		serviceLister:                  args.ServiceInformer.Lister(),
@@ -248,9 +243,10 @@ func NewConfigFactory(args *ConfigFactoryArgs) *Configurator {
 		replicaSetLister:               args.ReplicaSetInformer.Lister(),
 		statefulSetLister:              args.StatefulSetInformer.Lister(),
 		pdbLister:                      args.PdbInformer.Lister(),
+		nodeLister:                     args.NodeInformer.Lister(),
+		podLister:                      args.PodInformer.Lister(),
 		storageClassLister:             storageClassLister,
 		csiNodeLister:                  csiNodeLister,
-		framework:                      framework,
 		schedulerCache:                 schedulerCache,
 		StopEverything:                 stopEverything,
 		hardPodAffinitySymmetricWeight: args.HardPodAffinitySymmetricWeight,
@@ -258,24 +254,15 @@ func NewConfigFactory(args *ConfigFactoryArgs) *Configurator {
 		percentageOfNodesToScore:       args.PercentageOfNodesToScore,
 		bindTimeoutSeconds:             args.BindTimeoutSeconds,
 		enableNonPreempting:            utilfeature.DefaultFeatureGate.Enabled(features.NonPreemptingPriority),
+		registry:                       args.Registry,
+		plugins:                        args.Plugins,
+		pluginConfig:                   args.PluginConfig,
+		pluginConfigProducerRegistry:   args.PluginConfigProducerRegistry,
 	}
 	// Setup volume binder
 	c.volumeBinder = volumebinder.NewVolumeBinder(args.Client, args.NodeInformer, args.PvcInformer, args.PvInformer, args.StorageClassInformer, time.Duration(args.BindTimeoutSeconds)*time.Second)
 	c.scheduledPodsHasSynced = args.PodInformer.Informer().HasSynced
 
-	// Setup cache debugger
-	debugger := cachedebugger.New(
-		args.NodeInformer.Lister(),
-		args.PodInformer.Lister(),
-		c.schedulerCache,
-		c.podQueue,
-	)
-	debugger.ListenForSignal(c.StopEverything)
-
-	go func() {
-		<-c.StopEverything
-		c.podQueue.Close()
-	}()
 	return c
 }
 
@@ -385,12 +372,12 @@ func (c *Configurator) CreateFromKeys(predicateKeys, priorityKeys sets.String, e
 		return nil, fmt.Errorf("invalid hardPodAffinitySymmetricWeight: %d, must be in the range 1-100", c.GetHardPodAffinitySymmetricWeight())
 	}
 
-	predicateFuncs, err := c.GetPredicates(predicateKeys)
+	predicateFuncs, pluginsForPredicates, pluginConfigForPredicates, err := c.getPredicateConfigs(predicateKeys)
 	if err != nil {
 		return nil, err
 	}
 
-	priorityConfigs, err := c.getPriorityFunctionConfigs(priorityKeys)
+	priorityConfigs, pluginsForPriorities, pluginConfigForPriorities, err := c.getPriorityConfigs(priorityKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -405,14 +392,46 @@ func (c *Configurator) CreateFromKeys(predicateKeys, priorityKeys sets.String, e
 		return nil, err
 	}
 
+	// Combine all framework configurations. If this results in any duplication, framework
+	// instantiation should fail.
+	var plugins config.Plugins
+	plugins.Append(pluginsForPredicates)
+	plugins.Append(pluginsForPriorities)
+	plugins.Append(c.plugins)
+	var pluginConfig []config.PluginConfig
+	pluginConfig = append(pluginConfig, pluginConfigForPredicates...)
+	pluginConfig = append(pluginConfig, pluginConfigForPriorities...)
+	pluginConfig = append(pluginConfig, c.pluginConfig...)
+
+	framework, err := framework.NewFramework(c.registry, &plugins, pluginConfig)
+	if err != nil {
+		klog.Fatalf("error initializing the scheduling framework: %v", err)
+	}
+
+	podQueue := internalqueue.NewSchedulingQueue(c.StopEverything, framework)
+
+	// Setup cache debugger.
+	debugger := cachedebugger.New(
+		c.nodeLister,
+		c.podLister,
+		c.schedulerCache,
+		podQueue,
+	)
+	debugger.ListenForSignal(c.StopEverything)
+
+	go func() {
+		<-c.StopEverything
+		podQueue.Close()
+	}()
+
 	algo := core.NewGenericScheduler(
 		c.schedulerCache,
-		c.podQueue,
+		podQueue,
 		predicateFuncs,
 		predicateMetaProducer,
 		priorityConfigs,
 		priorityMetaProducer,
-		c.framework,
+		framework,
 		extenders,
 		c.volumeBinder,
 		c.pVCLister,
@@ -424,20 +443,21 @@ func (c *Configurator) CreateFromKeys(predicateKeys, priorityKeys sets.String, e
 	)
 
 	return &Config{
-		SchedulerCache:      c.schedulerCache,
-		Algorithm:           algo,
-		GetBinder:           getBinderFunc(c.client, extenders),
-		PodConditionUpdater: &podConditionUpdater{c.client},
-		PodPreemptor:        &podPreemptor{c.client},
-		Framework:           c.framework,
+		SchedulerCache: c.schedulerCache,
+		Algorithm:      algo,
+		GetBinder:      getBinderFunc(c.client, extenders),
+		PodPreemptor:   &podPreemptor{c.client},
+		Framework:      framework,
 		WaitForCacheSync: func() bool {
 			return cache.WaitForCacheSync(c.StopEverything, c.scheduledPodsHasSynced)
 		},
-		NextPod:         internalqueue.MakeNextPodFunc(c.podQueue),
-		Error:           MakeDefaultErrorFunc(c.client, c.podQueue, c.schedulerCache, c.StopEverything),
+		NextPod:         internalqueue.MakeNextPodFunc(podQueue),
+		Error:           MakeDefaultErrorFunc(c.client, podQueue, c.schedulerCache, c.StopEverything),
 		StopEverything:  c.StopEverything,
 		VolumeBinder:    c.volumeBinder,
-		SchedulingQueue: c.podQueue,
+		SchedulingQueue: podQueue,
+		Plugins:         plugins,
+		PluginConfig:    pluginConfig,
 	}, nil
 }
 
@@ -454,22 +474,43 @@ func getBinderFunc(client clientset.Interface, extenders []algorithm.SchedulerEx
 	}
 }
 
-func (c *Configurator) getPriorityFunctionConfigs(priorityKeys sets.String) ([]priorities.PriorityConfig, error) {
-	pluginArgs, err := c.getPluginArgs()
+// getPriorityConfigs returns priorities configuration: ones that will run as priorities and ones that will run
+// as framework plugins. Specifically, a priority will run as a framework plugin if a plugin config producer was
+// registered for that priority.
+func (c *Configurator) getPriorityConfigs(priorityKeys sets.String) ([]priorities.PriorityConfig, *config.Plugins, []config.PluginConfig, error) {
+	algorithmArgs, configProducerArgs := c.getAlgorithmArgs()
+
+	allPriorityConfigs, err := getPriorityFunctionConfigs(priorityKeys, *algorithmArgs)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return getPriorityFunctionConfigs(priorityKeys, *pluginArgs)
+	if c.pluginConfigProducerRegistry == nil {
+		return allPriorityConfigs, nil, nil, nil
+	}
+
+	var priorityConfigs []priorities.PriorityConfig
+	var plugins config.Plugins
+	var pluginConfig []config.PluginConfig
+	frameworkConfigProducers := c.pluginConfigProducerRegistry.PriorityToConfigProducer
+	for _, p := range allPriorityConfigs {
+		if producer, exist := frameworkConfigProducers[p.Name]; exist {
+			args := *configProducerArgs
+			args.Weight = int32(p.Weight)
+			pl, pc := producer(args)
+			plugins.Append(&pl)
+			pluginConfig = append(pluginConfig, pc...)
+		} else {
+			priorityConfigs = append(priorityConfigs, p)
+		}
+	}
+	return priorityConfigs, &plugins, pluginConfig, nil
 }
 
 func (c *Configurator) getPriorityMetadataProducer() (priorities.PriorityMetadataProducer, error) {
-	pluginArgs, err := c.getPluginArgs()
-	if err != nil {
-		return nil, err
-	}
+	algorithmArgs, _ := c.getAlgorithmArgs()
 
-	return getPriorityMetadataProducer(*pluginArgs)
+	return getPriorityMetadataProducer(*algorithmArgs)
 }
 
 // GetPredicateMetadataProducer returns a function to build Predicate Metadata.
@@ -478,18 +519,63 @@ func (c *Configurator) GetPredicateMetadataProducer() (predicates.PredicateMetad
 	return getPredicateMetadataProducer()
 }
 
-// GetPredicates returns the predicate functions.
-// It is used by the scheduler and other components, such as k8s.io/autoscaler/cluster-autoscaler.
-func (c *Configurator) GetPredicates(predicateKeys sets.String) (map[string]predicates.FitPredicate, error) {
-	pluginArgs, err := c.getPluginArgs()
+// getPredicateConfigs returns predicates configuration: ones that will run as fitPredicates and ones that will run
+// as framework plugins. Specifically, a predicate will run as a framework plugin if a plugin config producer was
+// registered for that predicate.
+// Note that the framework executes plugins according to their order in the Plugins list, and so predicates run as plugins
+// are added to the Plugins list according to the order specified in predicates.Ordering().
+func (c *Configurator) getPredicateConfigs(predicateKeys sets.String) (map[string]predicates.FitPredicate, *config.Plugins, []config.PluginConfig, error) {
+	algorithmArgs, configProducerArgs := c.getAlgorithmArgs()
+
+	allFitPredicates, err := getFitPredicateFunctions(predicateKeys, *algorithmArgs)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return getFitPredicateFunctions(predicateKeys, *pluginArgs)
+	if c.pluginConfigProducerRegistry == nil {
+		return allFitPredicates, nil, nil, nil
+	}
+
+	asPlugins := sets.NewString()
+	asFitPredicates := make(map[string]predicates.FitPredicate)
+	frameworkConfigProducers := c.pluginConfigProducerRegistry.PredicateToConfigProducer
+
+	// First, identify the predicates that will run as actual fit predicates, and ones
+	// that will run as framework plugins.
+	for predicateKey := range allFitPredicates {
+		if _, exist := frameworkConfigProducers[predicateKey]; exist {
+			asPlugins.Insert(predicateKey)
+		} else {
+			asFitPredicates[predicateKey] = allFitPredicates[predicateKey]
+		}
+	}
+
+	// Second, create the framework plugin configurations, and place them in the order
+	// that the corresponding predicates were supposed to run.
+	var plugins config.Plugins
+	var pluginConfig []config.PluginConfig
+	for _, predicateKey := range predicates.Ordering() {
+		if asPlugins.Has(predicateKey) {
+			producer := frameworkConfigProducers[predicateKey]
+			p, pc := producer(*configProducerArgs)
+			plugins.Append(&p)
+			pluginConfig = append(pluginConfig, pc...)
+			asPlugins.Delete(predicateKey)
+		}
+	}
+
+	// Third, add the rest in no specific order.
+	for predicateKey := range asPlugins {
+		producer := frameworkConfigProducers[predicateKey]
+		p, pc := producer(*configProducerArgs)
+		plugins.Append(&p)
+		pluginConfig = append(pluginConfig, pc...)
+	}
+
+	return asFitPredicates, &plugins, pluginConfig, nil
 }
 
-func (c *Configurator) getPluginArgs() (*PluginFactoryArgs, error) {
+func (c *Configurator) getAlgorithmArgs() (*PluginFactoryArgs, *plugins.ConfigProducerArgs) {
 	return &PluginFactoryArgs{
 		PodLister:                      c.schedulerCache,
 		ServiceLister:                  c.serviceLister,
@@ -505,7 +591,7 @@ func (c *Configurator) getPluginArgs() (*PluginFactoryArgs, error) {
 		StorageClassInfo:               &predicates.CachedStorageClassInfo{StorageClassLister: c.storageClassLister},
 		VolumeBinder:                   c.volumeBinder,
 		HardPodAffinitySymmetricWeight: c.hardPodAffinitySymmetricWeight,
-	}, nil
+	}, &plugins.ConfigProducerArgs{}
 }
 
 type podInformer struct {
@@ -605,19 +691,6 @@ type binder struct {
 func (b *binder) Bind(binding *v1.Binding) error {
 	klog.V(3).Infof("Attempting to bind %v to %v", binding.Name, binding.Target.Name)
 	return b.Client.CoreV1().Pods(binding.Namespace).Bind(binding)
-}
-
-type podConditionUpdater struct {
-	Client clientset.Interface
-}
-
-func (p *podConditionUpdater) Update(pod *v1.Pod, condition *v1.PodCondition) error {
-	klog.V(3).Infof("Updating pod condition for %s/%s to (%s==%s, Reason=%s)", pod.Namespace, pod.Name, condition.Type, condition.Status, condition.Reason)
-	if podutil.UpdatePodCondition(&pod.Status, condition) {
-		_, err := p.Client.CoreV1().Pods(pod.Namespace).UpdateStatus(pod)
-		return err
-	}
-	return nil
 }
 
 type podPreemptor struct {

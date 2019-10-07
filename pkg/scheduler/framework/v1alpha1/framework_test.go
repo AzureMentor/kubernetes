@@ -19,24 +19,29 @@ package v1alpha1
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
+	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 )
 
 const (
-	scoreWithNormalizePlugin1  = "score-with-normalize-plugin-1"
-	scoreWithNormalizePlugin2  = "score-with-normalize-plugin-2"
-	scorePlugin1               = "score-plugin-1"
-	pluginNotImplementingScore = "plugin-not-implementing-score"
+	scoreWithNormalizePlugin1         = "score-with-normalize-plugin-1"
+	scoreWithNormalizePlugin2         = "score-with-normalize-plugin-2"
+	scorePlugin1                      = "score-plugin-1"
+	pluginNotImplementingScore        = "plugin-not-implementing-score"
+	preFilterPluginName               = "prefilter-plugin"
+	preFilterWithExtensionsPluginName = "prefilter-with-extensions-plugin"
+	duplicatePluginName               = "duplicate-plugin"
 )
 
 // TestScoreWithNormalizePlugin implements ScoreWithNormalizePlugin interface.
 // TestScorePlugin only implements ScorePlugin interface.
-var _ = ScoreWithNormalizePlugin(&TestScoreWithNormalizePlugin{})
+var _ = ScorePlugin(&TestScoreWithNormalizePlugin{})
 var _ = ScorePlugin(&TestScorePlugin{})
 
 func newScoreWithNormalizePlugin1(injArgs *runtime.Unknown, f FrameworkHandle) (Plugin, error) {
@@ -76,12 +81,16 @@ func (pl *TestScoreWithNormalizePlugin) Name() string {
 	return pl.name
 }
 
-func (pl *TestScoreWithNormalizePlugin) NormalizeScore(pc *PluginContext, pod *v1.Pod, scores NodeScoreList) *Status {
+func (pl *TestScoreWithNormalizePlugin) NormalizeScore(state *CycleState, pod *v1.Pod, scores NodeScoreList) *Status {
 	return injectNormalizeRes(pl.inj, scores)
 }
 
-func (pl *TestScoreWithNormalizePlugin) Score(pc *PluginContext, p *v1.Pod, nodeName string) (int, *Status) {
+func (pl *TestScoreWithNormalizePlugin) Score(state *CycleState, p *v1.Pod, nodeName string) (int, *Status) {
 	return setScoreRes(pl.inj)
+}
+
+func (pl *TestScoreWithNormalizePlugin) ScoreExtensions() ScoreExtensions {
+	return pl
 }
 
 // TestScorePlugin only implements ScorePlugin interface.
@@ -94,8 +103,12 @@ func (pl *TestScorePlugin) Name() string {
 	return pl.name
 }
 
-func (pl *TestScorePlugin) Score(pc *PluginContext, p *v1.Pod, nodeName string) (int, *Status) {
+func (pl *TestScorePlugin) Score(state *CycleState, p *v1.Pod, nodeName string) (int, *Status) {
 	return setScoreRes(pl.inj)
+}
+
+func (pl *TestScorePlugin) ScoreExtensions() ScoreExtensions {
+	return nil
 }
 
 // PluginNotImplementingScore doesn't implement the ScorePlugin interface.
@@ -105,12 +118,84 @@ func (pl *PluginNotImplementingScore) Name() string {
 	return pluginNotImplementingScore
 }
 
+// TestPreFilterPlugin only implements PreFilterPlugin interface.
+type TestPreFilterPlugin struct {
+	PreFilterCalled int
+}
+
+func (pl *TestPreFilterPlugin) Name() string {
+	return preFilterPluginName
+}
+
+func (pl *TestPreFilterPlugin) PreFilter(state *CycleState, p *v1.Pod) *Status {
+	pl.PreFilterCalled++
+	return nil
+}
+
+func (pl *TestPreFilterPlugin) PreFilterExtensions() PreFilterExtensions {
+	return nil
+}
+
+// TestPreFilterWithExtensionsPlugin implements Add/Remove interfaces.
+type TestPreFilterWithExtensionsPlugin struct {
+	PreFilterCalled int
+	AddCalled       int
+	RemoveCalled    int
+}
+
+func (pl *TestPreFilterWithExtensionsPlugin) Name() string {
+	return preFilterWithExtensionsPluginName
+}
+
+func (pl *TestPreFilterWithExtensionsPlugin) PreFilter(state *CycleState, p *v1.Pod) *Status {
+	pl.PreFilterCalled++
+	return nil
+}
+
+func (pl *TestPreFilterWithExtensionsPlugin) AddPod(state *CycleState, podToSchedule *v1.Pod,
+	podToAdd *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *Status {
+	pl.AddCalled++
+	return nil
+}
+
+func (pl *TestPreFilterWithExtensionsPlugin) RemovePod(state *CycleState, podToSchedule *v1.Pod,
+	podToRemove *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *Status {
+	pl.RemoveCalled++
+	return nil
+}
+
+func (pl *TestPreFilterWithExtensionsPlugin) PreFilterExtensions() PreFilterExtensions {
+	return pl
+}
+
+type TestDuplicatePlugin struct {
+}
+
+func (dp *TestDuplicatePlugin) Name() string {
+	return duplicatePluginName
+}
+
+func (dp *TestDuplicatePlugin) PreFilter(state *CycleState, p *v1.Pod) *Status {
+	return nil
+}
+
+func (dp *TestDuplicatePlugin) PreFilterExtensions() PreFilterExtensions {
+	return nil
+}
+
+var _ PreFilterPlugin = &TestDuplicatePlugin{}
+
+func newDuplicatePlugin(_ *runtime.Unknown, _ FrameworkHandle) (Plugin, error) {
+	return &TestDuplicatePlugin{}, nil
+}
+
 var registry Registry = func() Registry {
 	r := make(Registry)
 	r.Register(scoreWithNormalizePlugin1, newScoreWithNormalizePlugin1)
 	r.Register(scoreWithNormalizePlugin2, newScoreWithNormalizePlugin2)
 	r.Register(scorePlugin1, newScorePlugin1)
 	r.Register(pluginNotImplementingScore, newPluginNotImplementingScore)
+	r.Register(duplicatePluginName, newDuplicatePlugin)
 	return r
 }()
 
@@ -121,7 +206,7 @@ var defaultWeights = map[string]int32{
 }
 
 var emptyArgs []config.PluginConfig = make([]config.PluginConfig, 0)
-var pc = &PluginContext{}
+var state = &CycleState{}
 
 // Pod is only used for logging errors.
 var pod = &v1.Pod{}
@@ -175,6 +260,28 @@ func TestInitFrameworkWithScorePlugins(t *testing.T) {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
 		})
+	}
+}
+
+func TestRegisterDuplicatePluginWouldFail(t *testing.T) {
+	plugin := config.Plugin{Name: duplicatePluginName, Weight: 1}
+
+	pluginSet := config.PluginSet{
+		Enabled: []config.Plugin{
+			plugin,
+			plugin,
+		},
+	}
+	plugins := config.Plugins{}
+	plugins.PreFilter = &pluginSet
+
+	_, err := NewFramework(registry, &plugins, emptyArgs)
+	if err == nil {
+		t.Fatal("Framework initialization should fail")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("Unexpected error, got %s, expect: plugin already registered", err.Error())
 	}
 }
 
@@ -346,7 +453,7 @@ func TestRunScorePlugins(t *testing.T) {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
 
-			res, status := f.RunScorePlugins(pc, pod, nodes)
+			res, status := f.RunScorePlugins(state, pod, nodes)
 
 			if tt.err {
 				if status.IsSuccess() {
@@ -365,6 +472,44 @@ func TestRunScorePlugins(t *testing.T) {
 	}
 }
 
+func TestPreFilterPlugins(t *testing.T) {
+	preFilter1 := &TestPreFilterPlugin{}
+	preFilter2 := &TestPreFilterWithExtensionsPlugin{}
+	r := make(Registry)
+	r.Register(preFilterPluginName,
+		func(_ *runtime.Unknown, fh FrameworkHandle) (Plugin, error) {
+			return preFilter1, nil
+		})
+	r.Register(preFilterWithExtensionsPluginName,
+		func(_ *runtime.Unknown, fh FrameworkHandle) (Plugin, error) {
+			return preFilter2, nil
+		})
+	plugins := &config.Plugins{PreFilter: &config.PluginSet{Enabled: []config.Plugin{{Name: preFilterWithExtensionsPluginName}, {Name: preFilterPluginName}}}}
+	t.Run("TestPreFilterPlugin", func(t *testing.T) {
+		f, err := NewFramework(r, plugins, emptyArgs)
+		if err != nil {
+			t.Fatalf("Failed to create framework for testing: %v", err)
+		}
+		f.RunPreFilterPlugins(nil, nil)
+		f.RunPreFilterExtensionAddPod(nil, nil, nil, nil)
+		f.RunPreFilterExtensionRemovePod(nil, nil, nil, nil)
+
+		if preFilter1.PreFilterCalled != 1 {
+			t.Errorf("preFilter1 called %v, expected: 1", preFilter1.PreFilterCalled)
+		}
+		if preFilter2.PreFilterCalled != 1 {
+			t.Errorf("preFilter2 called %v, expected: 1", preFilter2.PreFilterCalled)
+		}
+		if preFilter2.AddCalled != 1 {
+			t.Errorf("AddPod called %v, expected: 1", preFilter2.AddCalled)
+		}
+		if preFilter2.RemoveCalled != 1 {
+			t.Errorf("AddPod called %v, expected: 1", preFilter2.RemoveCalled)
+		}
+	})
+
+}
+
 func buildConfigDefaultWeights(ps ...string) *config.Plugins {
 	return buildConfigWithWeights(defaultWeights, ps...)
 }
@@ -378,10 +523,10 @@ func buildConfigWithWeights(weights map[string]int32, ps ...string) *config.Plug
 }
 
 type injectedResult struct {
-	ScoreRes     int  `json:"scoreRes,omitempty"`
-	NormalizeRes int  `json:"normalizeRes,omitempty"`
-	ScoreErr     bool `json:"scoreErr,omitempty"`
-	NormalizeErr bool `json:"normalizeErr,omitempty"`
+	ScoreRes     int   `json:"scoreRes,omitempty"`
+	NormalizeRes int64 `json:"normalizeRes,omitempty"`
+	ScoreErr     bool  `json:"scoreErr,omitempty"`
+	NormalizeErr bool  `json:"normalizeErr,omitempty"`
 }
 
 func setScoreRes(inj injectedResult) (int, *Status) {

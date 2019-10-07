@@ -54,6 +54,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework/testfiles"
 	"k8s.io/kubernetes/test/e2e/manifest"
 	testutils "k8s.io/kubernetes/test/utils"
+	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	"github.com/onsi/ginkgo"
 )
@@ -831,6 +832,7 @@ type NginxIngressController struct {
 	rc     *v1.ReplicationController
 	pod    *v1.Pod
 	Client clientset.Interface
+	lbSvc  *v1.Service
 }
 
 // Init initializes the NginxIngressController
@@ -848,8 +850,8 @@ func (cont *NginxIngressController) Init() {
 			{Name: "https", Port: 443},
 			{Name: "stats", Port: 18080}}
 	})
-	svc := serviceJig.WaitForLoadBalancerOrFail(cont.Ns, "nginx-ingress-lb", e2eservice.LoadBalancerCreateTimeoutDefault)
-	serviceJig.SanityCheckService(svc, v1.ServiceTypeLoadBalancer)
+	cont.lbSvc = serviceJig.WaitForLoadBalancerOrFail(cont.Ns, "nginx-ingress-lb", e2eservice.GetServiceLoadBalancerCreationTimeout(cont.Client))
+	serviceJig.SanityCheckService(cont.lbSvc, v1.ServiceTypeLoadBalancer)
 
 	read := func(file string) string {
 		return string(testfiles.ReadOrDie(filepath.Join(IngressManifestPath, "nginx", file)))
@@ -871,6 +873,15 @@ func (cont *NginxIngressController) Init() {
 	}
 	cont.pod = &pods.Items[0]
 	framework.Logf("ingress controller running in pod %v", cont.pod.Name)
+}
+
+// TearDown cleans up the NginxIngressController.
+func (cont *NginxIngressController) TearDown() {
+	if cont.lbSvc == nil {
+		framework.Logf("No LoadBalancer service created, no cleanup necessary")
+		return
+	}
+	e2eservice.WaitForServiceDeletedWithFinalizer(cont.Client, cont.Ns, cont.lbSvc.Name)
 }
 
 func generateBacksideHTTPSIngressSpec(ns string) *networkingv1beta1.Ingress {
@@ -934,7 +945,7 @@ func generateBacksideHTTPSDeploymentSpec() *appsv1.Deployment {
 					Containers: []v1.Container{
 						{
 							Name:  "echoheaders-https",
-							Image: "k8s.gcr.io/echoserver:1.10",
+							Image: imageutils.GetE2EImage(imageutils.EchoServer),
 							Ports: []v1.ContainerPort{{
 								ContainerPort: 8443,
 								Name:          "echo-443",

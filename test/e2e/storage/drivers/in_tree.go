@@ -56,6 +56,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/framework/auth"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	"k8s.io/kubernetes/test/e2e/framework/volume"
 	"k8s.io/kubernetes/test/e2e/storage/testpatterns"
 	"k8s.io/kubernetes/test/e2e/storage/testsuites"
@@ -1157,6 +1158,7 @@ func InitGcePdDriver() testsuites.TestDriver {
 			MaxFileSize:          testpatterns.FileSizeMedium,
 			SupportedFsType:      supportedTypes,
 			SupportedMountOption: sets.NewString("debug", "nouid32"),
+			TopologyKeys:         []string{v1.LabelZoneFailureDomain},
 			Capabilities: map[testsuites.Capability]bool{
 				testsuites.CapPersistence:         true,
 				testsuites.CapFsGroup:             true,
@@ -1168,6 +1170,7 @@ func InitGcePdDriver() testsuites.TestDriver {
 				// GCE supports volume limits, but the test creates large
 				// number of volumes and times out test suites.
 				testsuites.CapVolumeLimits: false,
+				testsuites.CapTopology:     true,
 			},
 		},
 	}
@@ -1255,7 +1258,7 @@ func (g *gcePdDriver) CreateVolume(config *testsuites.PerTestConfig, volType tes
 		}
 	}
 	ginkgo.By("creating a test gce pd volume")
-	vname, err := framework.CreatePDWithRetry()
+	vname, err := e2epv.CreatePDWithRetry()
 	framework.ExpectNoError(err)
 	return &gcePdVolume{
 		volumeName: vname,
@@ -1263,7 +1266,7 @@ func (g *gcePdDriver) CreateVolume(config *testsuites.PerTestConfig, volType tes
 }
 
 func (v *gcePdVolume) DeleteVolume() {
-	framework.DeletePDWithRetry(v.volumeName)
+	e2epv.DeletePDWithRetry(v.volumeName)
 }
 
 // vSphere
@@ -1286,7 +1289,7 @@ var _ testsuites.DynamicPVTestDriver = &vSphereDriver{}
 func InitVSphereDriver() testsuites.TestDriver {
 	return &vSphereDriver{
 		driverInfo: testsuites.DriverInfo{
-			Name:             "vSphere",
+			Name:             "vsphere",
 			InTreePluginName: "kubernetes.io/vsphere-volume",
 			MaxFileSize:      testpatterns.FileSizeMedium,
 			SupportedFsType: sets.NewString(
@@ -1513,7 +1516,7 @@ func (a *azureDriver) CreateVolume(config *testsuites.PerTestConfig, volType tes
 			v1.LabelZoneFailureDomain: framework.TestContext.CloudConfig.Zone,
 		}
 	}
-	volumeName, err := framework.CreatePDWithRetry()
+	volumeName, err := e2epv.CreatePDWithRetry()
 	framework.ExpectNoError(err)
 	return &azureVolume{
 		volumeName: volumeName,
@@ -1521,7 +1524,7 @@ func (a *azureDriver) CreateVolume(config *testsuites.PerTestConfig, volType tes
 }
 
 func (v *azureVolume) DeleteVolume() {
-	framework.DeletePDWithRetry(v.volumeName)
+	e2epv.DeletePDWithRetry(v.volumeName)
 }
 
 // AWS
@@ -1650,7 +1653,7 @@ func (a *awsDriver) CreateVolume(config *testsuites.PerTestConfig, volType testp
 		}
 	}
 	ginkgo.By("creating a test aws volume")
-	vname, err := framework.CreatePDWithRetry()
+	vname, err := e2epv.CreatePDWithRetry()
 	framework.ExpectNoError(err)
 	return &awsVolume{
 		volumeName: vname,
@@ -1658,7 +1661,7 @@ func (a *awsDriver) CreateVolume(config *testsuites.PerTestConfig, volType testp
 }
 
 func (v *awsVolume) DeleteVolume() {
-	framework.DeletePDWithRetry(v.volumeName)
+	e2epv.DeletePDWithRetry(v.volumeName)
 }
 
 // local

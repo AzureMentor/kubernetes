@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "go_default_library",
@@ -17,10 +17,10 @@ go_library(
         "pods.go",
         "profile_gatherer.go",
         "provider.go",
-        "pv_util.go",
         "rc_util.go",
         "resource_usage_gatherer.go",
         "size.go",
+        "skip.go",
         "suites.go",
         "test_context.go",
         "util.go",
@@ -30,7 +30,6 @@ go_library(
     deps = [
         "//pkg/api/v1/pod:go_default_library",
         "//pkg/apis/core:go_default_library",
-        "//pkg/apis/storage/v1/util:go_default_library",
         "//pkg/client/conditions:go_default_library",
         "//pkg/controller:go_default_library",
         "//pkg/features:go_default_library",
@@ -39,24 +38,19 @@ go_library(
         "//pkg/kubelet/sysctl:go_default_library",
         "//pkg/master/ports:go_default_library",
         "//pkg/util/taints:go_default_library",
-        "//pkg/version:go_default_library",
-        "//pkg/volume/util:go_default_library",
         "//staging/src/k8s.io/api/apps/v1:go_default_library",
         "//staging/src/k8s.io/api/core/v1:go_default_library",
         "//staging/src/k8s.io/api/rbac/v1:go_default_library",
         "//staging/src/k8s.io/api/storage/v1:go_default_library",
         "//staging/src/k8s.io/api/storage/v1beta1:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/api/errors:go_default_library",
-        "//staging/src/k8s.io/apimachinery/pkg/api/resource:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/fields:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/labels:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/runtime:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
-        "//staging/src/k8s.io/apimachinery/pkg/types:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/intstr:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/net:go_default_library",
-        "//staging/src/k8s.io/apimachinery/pkg/util/rand:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/runtime:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/sets:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/uuid:go_default_library",
@@ -80,9 +74,9 @@ go_library(
         "//staging/src/k8s.io/client-go/tools/remotecommand:go_default_library",
         "//staging/src/k8s.io/client-go/tools/watch:go_default_library",
         "//staging/src/k8s.io/component-base/cli/flag:go_default_library",
+        "//staging/src/k8s.io/component-base/version:go_default_library",
         "//test/e2e/framework/ginkgowrapper:go_default_library",
         "//test/e2e/framework/kubelet:go_default_library",
-        "//test/e2e/framework/log:go_default_library",
         "//test/e2e/framework/metrics:go_default_library",
         "//test/e2e/framework/node:go_default_library",
         "//test/e2e/framework/pod:go_default_library",
@@ -141,6 +135,7 @@ filegroup(
         "//test/e2e/framework/providers/openstack:all-srcs",
         "//test/e2e/framework/providers/vsphere:all-srcs",
         "//test/e2e/framework/psp:all-srcs",
+        "//test/e2e/framework/pv:all-srcs",
         "//test/e2e/framework/replicaset:all-srcs",
         "//test/e2e/framework/resource:all-srcs",
         "//test/e2e/framework/service:all-srcs",
@@ -153,4 +148,16 @@ filegroup(
     ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = ["log_test.go"],
+    embed = [":go_default_library"],
+    deps = [
+        "//vendor/github.com/onsi/ginkgo:go_default_library",
+        "//vendor/github.com/onsi/ginkgo/config:go_default_library",
+        "//vendor/github.com/onsi/ginkgo/reporters:go_default_library",
+        "//vendor/github.com/onsi/gomega:go_default_library",
+    ],
 )

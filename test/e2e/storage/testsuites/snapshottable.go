@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	"k8s.io/kubernetes/test/e2e/storage/testpatterns"
 )
 
@@ -100,8 +101,8 @@ func (s *snapshottableTestSuite) defineTests(driver TestDriver, pattern testpatt
 		dc := f.DynamicClient
 
 		// Now do the more expensive test initialization.
-		config, testCleanup := driver.PrepareTest(f)
-		defer testCleanup()
+		config, driverCleanup := driver.PrepareTest(f)
+		defer driverCleanup()
 
 		vsc := sDriver.GetSnapshotClass(config)
 		class := dDriver.GetDynamicProvisionStorageClass(config, "")
@@ -109,7 +110,7 @@ func (s *snapshottableTestSuite) defineTests(driver TestDriver, pattern testpatt
 			framework.Skipf("Driver %q does not define Dynamic Provision StorageClass - skipping", driver.GetDriverInfo().Name)
 		}
 
-		pvc := framework.MakePersistentVolumeClaim(framework.PersistentVolumeClaimConfig{
+		pvc := e2epv.MakePersistentVolumeClaim(e2epv.PersistentVolumeClaimConfig{
 			ClaimSize:        dDriver.GetClaimSize(),
 			StorageClassName: &(class.Name),
 		}, config.Framework.Namespace.Name)
@@ -135,7 +136,7 @@ func (s *snapshottableTestSuite) defineTests(driver TestDriver, pattern testpatt
 				framework.Failf("Error deleting claim %q. Error: %v", pvc.Name, err)
 			}
 		}()
-		err = framework.WaitForPersistentVolumeClaimPhase(v1.ClaimBound, cs, pvc.Namespace, pvc.Name, framework.Poll, framework.ClaimProvisionTimeout)
+		err = e2epv.WaitForPersistentVolumeClaimPhase(v1.ClaimBound, cs, pvc.Namespace, pvc.Name, framework.Poll, framework.ClaimProvisionTimeout)
 		framework.ExpectNoError(err)
 
 		ginkgo.By("checking the claim")

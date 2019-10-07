@@ -35,7 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/util"
 )
 
-var negPriority, lowPriority, midPriority, highPriority, veryHighPriority = int32(-100), int32(0), int32(100), int32(1000), int32(10000)
+var lowPriority, midPriority, highPriority = int32(0), int32(100), int32(1000)
 var mediumPriority = (lowPriority + highPriority) / 2
 var highPriorityPod, highPriNominatedPod, medPriorityPod, unschedulablePod = v1.Pod{
 	ObjectMeta: metav1.ObjectMeta{
@@ -157,49 +157,61 @@ type fakeFramework struct{}
 
 func (*fakeFramework) QueueSortFunc() framework.LessFunc {
 	return func(podInfo1, podInfo2 *framework.PodInfo) bool {
-		prio1 := util.GetPodPriority(podInfo1.Pod)
-		prio2 := util.GetPodPriority(podInfo2.Pod)
+		prio1 := podutil.GetPodPriority(podInfo1.Pod)
+		prio2 := podutil.GetPodPriority(podInfo2.Pod)
 		return prio1 < prio2
 	}
+}
+
+func (f *fakeFramework) ListPlugins() map[string][]string {
+	return nil
 }
 
 func (*fakeFramework) NodeInfoSnapshot() *schedulernodeinfo.Snapshot {
 	return nil
 }
 
-func (*fakeFramework) RunPreFilterPlugins(pc *framework.PluginContext, pod *v1.Pod) *framework.Status {
+func (*fakeFramework) RunPreFilterPlugins(state *framework.CycleState, pod *v1.Pod) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunFilterPlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) *framework.Status {
+func (*fakeFramework) RunFilterPlugins(state *framework.CycleState, pod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunScorePlugins(pc *framework.PluginContext, pod *v1.Pod, nodes []*v1.Node) (framework.PluginToNodeScores, *framework.Status) {
+func (*fakeFramework) RunPreFilterExtensionAddPod(state *framework.CycleState, podToSchedule *v1.Pod, podToAdd *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
+	return nil
+}
+
+func (*fakeFramework) RunPreFilterExtensionRemovePod(state *framework.CycleState, podToSchedule *v1.Pod, podToAdd *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
+	return nil
+}
+
+func (*fakeFramework) RunScorePlugins(state *framework.CycleState, pod *v1.Pod, nodes []*v1.Node) (framework.PluginToNodeScores, *framework.Status) {
 	return nil, nil
 }
 
-func (*fakeFramework) RunPreBindPlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) *framework.Status {
+func (*fakeFramework) RunPreBindPlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunBindPlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) *framework.Status {
+func (*fakeFramework) RunBindPlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunPostBindPlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) {}
+func (*fakeFramework) RunPostBindPlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) {}
 
-func (*fakeFramework) RunPostFilterPlugins(pc *framework.PluginContext, pod *v1.Pod, nodes []*v1.Node, filteredNodesStatuses framework.NodeToStatusMap) *framework.Status {
+func (*fakeFramework) RunPostFilterPlugins(state *framework.CycleState, pod *v1.Pod, nodes []*v1.Node, filteredNodesStatuses framework.NodeToStatusMap) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunReservePlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) *framework.Status {
+func (*fakeFramework) RunReservePlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	return nil
 }
 
-func (*fakeFramework) RunUnreservePlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) {}
+func (*fakeFramework) RunUnreservePlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) {}
 
-func (*fakeFramework) RunPermitPlugins(pc *framework.PluginContext, pod *v1.Pod, nodeName string) *framework.Status {
+func (*fakeFramework) RunPermitPlugins(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	return nil
 }
 
@@ -855,7 +867,7 @@ func TestPodFailedSchedulingMultipleTimesDoesNotBlockNewerPod(t *testing.T) {
 
 	// Add an unschedulable pod to a priority queue.
 	// This makes a situation that the pod was tried to schedule
-	// and had been determined unschedulable so far.
+	// and had been determined unschedulable so far
 	unschedulablePod := v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-pod-unscheduled",
