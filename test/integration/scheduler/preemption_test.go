@@ -19,6 +19,7 @@ limitations under the License.
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -40,7 +41,6 @@ import (
 	"k8s.io/kubernetes/pkg/apis/scheduling"
 	"k8s.io/kubernetes/pkg/scheduler"
 	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
-	frameworkplugins "k8s.io/kubernetes/pkg/scheduler/framework/plugins"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 	schedulernodeinfo "k8s.io/kubernetes/pkg/scheduler/nodeinfo"
 	"k8s.io/kubernetes/plugin/pkg/admission/priority"
@@ -85,7 +85,7 @@ func (fp *tokenFilter) Name() string {
 	return tokenFilterName
 }
 
-func (fp *tokenFilter) Filter(state *framework.CycleState, pod *v1.Pod,
+func (fp *tokenFilter) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod,
 	nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	if fp.Tokens > 0 {
 		fp.Tokens--
@@ -98,17 +98,17 @@ func (fp *tokenFilter) Filter(state *framework.CycleState, pod *v1.Pod,
 	return framework.NewStatus(status, fmt.Sprintf("can't fit %v", pod.Name))
 }
 
-func (fp *tokenFilter) PreFilter(state *framework.CycleState, pod *v1.Pod) *framework.Status {
+func (fp *tokenFilter) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) *framework.Status {
 	return nil
 }
 
-func (fp *tokenFilter) AddPod(state *framework.CycleState, podToSchedule *v1.Pod,
+func (fp *tokenFilter) AddPod(ctx context.Context, state *framework.CycleState, podToSchedule *v1.Pod,
 	podToAdd *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	fp.Tokens--
 	return nil
 }
 
-func (fp *tokenFilter) RemovePod(state *framework.CycleState, podToSchedule *v1.Pod,
+func (fp *tokenFilter) RemovePod(ctx context.Context, state *framework.CycleState, podToSchedule *v1.Pod,
 	podToRemove *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	fp.Tokens++
 	return nil
@@ -124,8 +124,7 @@ var _ = framework.FilterPlugin(&tokenFilter{})
 func TestPreemption(t *testing.T) {
 	// Initialize scheduler with a filter plugin.
 	var filter tokenFilter
-	registry := frameworkplugins.NewDefaultRegistry()
-
+	registry := make(framework.Registry)
 	registry.Register(filterPluginName, func(_ *runtime.Unknown, fh framework.FrameworkHandle) (framework.Plugin, error) {
 		return &filter, nil
 	})
@@ -149,7 +148,7 @@ func TestPreemption(t *testing.T) {
 		initTestMaster(t, "preemptiom", nil),
 		false, nil, time.Second,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkOutOfTreeRegistry(registry))
 
 	defer cleanupTest(t, context)
 	cs := context.clientSet
@@ -528,8 +527,8 @@ func TestPodPriorityResolution(t *testing.T) {
 	externalInformers := informers.NewSharedInformerFactory(externalClientset, time.Second)
 	admission.SetExternalKubeClientSet(externalClientset)
 	admission.SetExternalKubeInformerFactory(externalInformers)
-	externalInformers.Start(context.stopCh)
-	externalInformers.WaitForCacheSync(context.stopCh)
+	externalInformers.Start(context.ctx.Done())
+	externalInformers.WaitForCacheSync(context.ctx.Done())
 
 	tests := []struct {
 		Name             string

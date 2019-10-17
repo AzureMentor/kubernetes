@@ -195,11 +195,13 @@ var (
 			StabilityLevel: metrics.ALPHA,
 		},
 	)
-	PreemptionVictims = metrics.NewGauge(
-		&metrics.GaugeOpts{
-			Subsystem:      SchedulerSubsystem,
-			Name:           "pod_preemption_victims",
-			Help:           "Number of selected preemption victims",
+	PreemptionVictims = metrics.NewHistogram(
+		&metrics.HistogramOpts{
+			Subsystem: SchedulerSubsystem,
+			Name:      "pod_preemption_victims",
+			Help:      "Number of selected preemption victims",
+			// we think #victims>50 is pretty rare, therefore [50, +Inf) is considered a single bucket.
+			Buckets:        metrics.LinearBuckets(5, 5, 10),
 			StabilityLevel: metrics.ALPHA,
 		})
 	PreemptionAttempts = metrics.NewCounter(
@@ -217,6 +219,42 @@ var (
 			Help:           "Number of pending pods, by the queue type. 'active' means number of pods in activeQ; 'backoff' means number of pods in backoffQ; 'unschedulable' means number of pods in unschedulableQ.",
 			StabilityLevel: metrics.ALPHA,
 		}, []string{"queue"})
+
+	PodSchedulingDuration = metrics.NewHistogram(
+		&metrics.HistogramOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "pod_scheduling_duration_seconds",
+			Help:           "E2e latency for a pod being scheduled which may include multiple scheduling attempts.",
+			Buckets:        metrics.ExponentialBuckets(0.001, 2, 15),
+			StabilityLevel: metrics.ALPHA,
+		})
+
+	PodSchedulingAttempts = metrics.NewHistogram(
+		&metrics.HistogramOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "pod_scheduling_attempts",
+			Help:           "Number of attempts to successfully schedule a pod.",
+			Buckets:        metrics.ExponentialBuckets(1, 2, 5),
+			StabilityLevel: metrics.ALPHA,
+		})
+
+	FrameworkExtensionPointDuration = metrics.NewHistogramVec(
+		&metrics.HistogramOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "framework_extension_point_duration_seconds",
+			Help:           "Latency for running all plugins of a specific extension point.",
+			Buckets:        nil,
+			StabilityLevel: metrics.ALPHA,
+		},
+		[]string{"extension_point", "status"})
+
+	SchedulerQueueIncomingPods = metrics.NewCounterVec(
+		&metrics.CounterOpts{
+			Subsystem:      SchedulerSubsystem,
+			Name:           "queue_incoming_pods_total",
+			Help:           "Number of pods added to scheduling queues by event and queue type.",
+			StabilityLevel: metrics.ALPHA,
+		}, []string{"queue", "event"})
 
 	metricsList = []metrics.Registerable{
 		scheduleAttempts,
@@ -237,6 +275,10 @@ var (
 		PreemptionVictims,
 		PreemptionAttempts,
 		pendingPods,
+		PodSchedulingDuration,
+		PodSchedulingAttempts,
+		FrameworkExtensionPointDuration,
+		SchedulerQueueIncomingPods,
 	}
 )
 
@@ -251,6 +293,11 @@ func Register() {
 		}
 		volumeschedulingmetrics.RegisterVolumeSchedulingMetrics()
 	})
+}
+
+// GetGather returns the gatherer. It used by test case outside current package.
+func GetGather() metrics.Gatherer {
+	return legacyregistry.DefaultGatherer
 }
 
 // ActivePods returns the pending pods metrics with the label active

@@ -17,8 +17,10 @@ limitations under the License.
 package core
 
 import (
+	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -106,9 +108,9 @@ func machine2PrioritizerExtender(pod *v1.Pod, nodes []*v1.Node) (*framework.Node
 func machine2Prioritizer(_ *v1.Pod, nodeNameToInfo map[string]*schedulernodeinfo.NodeInfo, nodes []*v1.Node) (framework.NodeScoreList, error) {
 	result := []framework.NodeScore{}
 	for _, node := range nodes {
-		score := 1
+		score := 10
 		if node.Name == "machine2" {
-			score = 10
+			score = 100
 		}
 		result = append(result, framework.NodeScore{Name: node.Name, Score: int64(score)})
 	}
@@ -202,7 +204,7 @@ func (f *FakeExtender) selectVictimsOnNodeByExtender(
 	// and get cached node info by given node name.
 	nodeInfoCopy := f.cachedNodeNameToInfo[node.GetName()].Clone()
 
-	potentialVictims := util.SortableList{CompFunc: util.MoreImportantPod}
+	var potentialVictims []*v1.Pod
 
 	removePod := func(rp *v1.Pod) {
 		nodeInfoCopy.RemovePod(rp)
@@ -215,11 +217,11 @@ func (f *FakeExtender) selectVictimsOnNodeByExtender(
 	podPriority := podutil.GetPodPriority(pod)
 	for _, p := range nodeInfoCopy.Pods() {
 		if podutil.GetPodPriority(p) < podPriority {
-			potentialVictims.Items = append(potentialVictims.Items, p)
+			potentialVictims = append(potentialVictims, p)
 			removePod(p)
 		}
 	}
-	potentialVictims.Sort()
+	sort.Slice(potentialVictims, func(i, j int) bool { return util.MoreImportantPod(potentialVictims[i], potentialVictims[j]) })
 
 	// If the new pod does not fit after removing all the lower priority pods,
 	// we are almost done and this node is not suitable for preemption.
@@ -248,8 +250,8 @@ func (f *FakeExtender) selectVictimsOnNodeByExtender(
 
 	// For now, assume all potential victims to be non-violating.
 	// Now we try to reprieve non-violating victims.
-	for _, p := range potentialVictims.Items {
-		reprievePod(p.(*v1.Pod))
+	for _, p := range potentialVictims {
+		reprievePod(p)
 	}
 
 	return victims, numViolatingVictim, true, nil
@@ -557,7 +559,7 @@ func TestGenericSchedulerWithExtenders(t *testing.T) {
 				schedulerapi.DefaultPercentageOfNodesToScore,
 				false)
 			podIgnored := &v1.Pod{}
-			result, err := scheduler.Schedule(framework.NewCycleState(), podIgnored)
+			result, err := scheduler.Schedule(context.Background(), framework.NewCycleState(), podIgnored)
 			if test.expectsErr {
 				if err == nil {
 					t.Errorf("Unexpected non-error, result %+v", result)

@@ -29,7 +29,7 @@ import (
 
 	"k8s.io/klog"
 
-	coordv1beta1 "k8s.io/api/coordination/v1beta1"
+	coordv1 "k8s.io/api/coordination/v1"
 	v1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,18 +40,19 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	appsv1informers "k8s.io/client-go/informers/apps/v1"
-	coordinformers "k8s.io/client-go/informers/coordination/v1beta1"
+	coordinformers "k8s.io/client-go/informers/coordination/v1"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	appsv1listers "k8s.io/client-go/listers/apps/v1"
-	coordlisters "k8s.io/client-go/listers/coordination/v1beta1"
+	coordlisters "k8s.io/client-go/listers/coordination/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/component-base/metrics/prometheus/ratelimiter"
 	apicore "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/nodelifecycle/scheduler"
@@ -60,7 +61,6 @@ import (
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/api"
-	"k8s.io/kubernetes/pkg/util/metrics"
 	utilnode "k8s.io/kubernetes/pkg/util/node"
 	taintutils "k8s.io/kubernetes/pkg/util/taints"
 )
@@ -168,7 +168,7 @@ type nodeHealthData struct {
 	probeTimestamp           metav1.Time
 	readyTransitionTimestamp metav1.Time
 	status                   *v1.NodeStatus
-	lease                    *coordv1beta1.Lease
+	lease                    *coordv1.Lease
 }
 
 func (n *nodeHealthData) deepCopy() *nodeHealthData {
@@ -246,7 +246,7 @@ type Controller struct {
 	nodeLister          corelisters.NodeLister
 	nodeInformerSynced  cache.InformerSynced
 
-	getPodsAssignedToNode func(nodeName string) ([]v1.Pod, error)
+	getPodsAssignedToNode func(nodeName string) ([]*v1.Pod, error)
 
 	recorder record.EventRecorder
 
@@ -337,7 +337,7 @@ func NewNodeLifecycleController(
 		})
 
 	if kubeClient.CoreV1().RESTClient().GetRateLimiter() != nil {
-		metrics.RegisterMetricAndTrackRateLimiterUsage("node_lifecycle_controller", kubeClient.CoreV1().RESTClient().GetRateLimiter())
+		ratelimiter.RegisterMetricAndTrackRateLimiterUsage("node_lifecycle_controller", kubeClient.CoreV1().RESTClient().GetRateLimiter())
 	}
 
 	nc := &Controller{
@@ -419,18 +419,18 @@ func NewNodeLifecycleController(
 	})
 
 	podIndexer := podInformer.Informer().GetIndexer()
-	nc.getPodsAssignedToNode = func(nodeName string) ([]v1.Pod, error) {
+	nc.getPodsAssignedToNode = func(nodeName string) ([]*v1.Pod, error) {
 		objs, err := podIndexer.ByIndex(nodeNameKeyIndex, nodeName)
 		if err != nil {
 			return nil, err
 		}
-		pods := make([]v1.Pod, 0, len(objs))
+		pods := make([]*v1.Pod, 0, len(objs))
 		for _, obj := range objs {
 			pod, ok := obj.(*v1.Pod)
 			if !ok {
 				continue
 			}
-			pods = append(pods, *pod)
+			pods = append(pods, pod)
 		}
 		return pods, nil
 	}
@@ -700,14 +700,18 @@ func (nc *Controller) doEvictionPass() {
 	}
 }
 
-func listPodsFromNode(kubeClient clientset.Interface, nodeName string) ([]v1.Pod, error) {
+func listPodsFromNode(kubeClient clientset.Interface, nodeName string) ([]*v1.Pod, error) {
 	selector := fields.OneTermEqualSelector(apicore.PodHostField, nodeName).String()
 	options := metav1.ListOptions{FieldSelector: selector}
 	pods, err := kubeClient.CoreV1().Pods(metav1.NamespaceAll).List(options)
 	if err != nil {
 		return nil, err
 	}
-	return pods.Items, nil
+	rPods := make([]*v1.Pod, len(pods.Items))
+	for i := range pods.Items {
+		rPods[i] = &pods.Items[i]
+	}
+	return rPods, nil
 }
 
 // monitorNodeHealth verifies node health are constantly updated by kubelet, and
@@ -975,7 +979,7 @@ func (nc *Controller) tryUpdateNodeHealth(node *v1.Node) (time.Duration, v1.Node
 	//   - currently only correct Ready State transition outside of Node Controller is marking it ready by Kubelet, we don't check
 	//     if that's the case, but it does not seem necessary.
 	var savedCondition *v1.NodeCondition
-	var savedLease *coordv1beta1.Lease
+	var savedLease *coordv1.Lease
 	if nodeHealth != nil {
 		_, savedCondition = nodeutil.GetNodeCondition(nodeHealth.status, v1.NodeReady)
 		savedLease = nodeHealth.lease
@@ -1024,7 +1028,7 @@ func (nc *Controller) tryUpdateNodeHealth(node *v1.Node) (time.Duration, v1.Node
 			readyTransitionTimestamp: transitionTime,
 		}
 	}
-	var observedLease *coordv1beta1.Lease
+	var observedLease *coordv1.Lease
 	if utilfeature.DefaultFeatureGate.Enabled(features.NodeLease) {
 		// Always update the probe time if node lease is renewed.
 		// Note: If kubelet never posted the node status, but continues renewing the

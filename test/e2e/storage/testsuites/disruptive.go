@@ -45,12 +45,12 @@ func InitDisruptiveTestSuite() TestSuite {
 				testpatterns.FsVolModePreprovisionedPV,
 				testpatterns.FsVolModeDynamicPV,
 				testpatterns.BlockVolModePreprovisionedPV,
-				testpatterns.BlockVolModePreprovisionedPV,
 				testpatterns.BlockVolModeDynamicPV,
 			},
 		},
 	}
 }
+
 func (s *disruptiveTestSuite) getTestSuiteInfo() TestSuiteInfo {
 	return s.tsInfo
 }
@@ -93,7 +93,8 @@ func (s *disruptiveTestSuite) defineTests(driver TestDriver, pattern testpattern
 			framework.Skipf("Driver %s doesn't support %v -- skipping", driver.GetDriverInfo().Name, pattern.VolMode)
 		}
 
-		l.resource = createGenericVolumeTestResource(driver, l.config, pattern)
+		testVolumeSizeRange := s.getTestSuiteInfo().supportedSizeRange
+		l.resource = createGenericVolumeTestResource(driver, l.config, pattern, testVolumeSizeRange)
 	}
 
 	cleanup := func() {
@@ -140,9 +141,16 @@ func (s *disruptiveTestSuite) defineTests(driver TestDriver, pattern testpattern
 	}
 
 	for _, test := range disruptiveTestTable {
-		if test.runTestFile != nil {
-			func(t disruptiveTest) {
+		func(t disruptiveTest) {
+			if (pattern.VolMode == v1.PersistentVolumeBlock && t.runTestBlock != nil) ||
+				(pattern.VolMode == v1.PersistentVolumeFilesystem && t.runTestFile != nil) {
 				ginkgo.It(t.testItStmt, func() {
+
+					if pattern.VolMode == v1.PersistentVolumeBlock && driver.GetDriverInfo().InTreePluginName == "kubernetes.io/local-volume" {
+						// TODO: https://github.com/kubernetes/kubernetes/issues/74552
+						framework.Skipf("Local volume volume plugin does not support block volume reconstruction (#74552)")
+					}
+
 					init()
 					defer cleanup()
 
@@ -158,13 +166,14 @@ func (s *disruptiveTestSuite) defineTests(driver TestDriver, pattern testpattern
 					l.pod, err = e2epod.CreateSecPodWithNodeSelection(l.cs, l.ns.Name, pvcs, inlineSources, false, "", false, false, e2epv.SELinuxLabel, nil, e2epod.NodeSelection{Name: l.config.ClientNodeName}, framework.PodStartTimeout)
 					framework.ExpectNoError(err, "While creating pods for kubelet restart test")
 
-					if pattern.VolMode == v1.PersistentVolumeBlock {
+					if pattern.VolMode == v1.PersistentVolumeBlock && t.runTestBlock != nil {
 						t.runTestBlock(l.cs, l.config.Framework, l.pod)
-					} else {
+					}
+					if pattern.VolMode == v1.PersistentVolumeFilesystem && t.runTestFile != nil {
 						t.runTestFile(l.cs, l.config.Framework, l.pod)
 					}
 				})
-			}(test)
-		}
+			}
+		}(test)
 	}
 }

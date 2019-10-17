@@ -4,7 +4,6 @@ cmd/kube-controller-manager/app
 cmd/kube-proxy/app
 cmd/linkcheck
 cmd/preferredimports
-hack/make-rules/helpers/go2make/testdata/dir-with-gofiles
 pkg/client/tests
 pkg/controller/daemon
 pkg/controller/deployment
@@ -29,7 +28,6 @@ pkg/kubelet/pluginmanager/pluginwatcher
 pkg/kubelet/remote
 pkg/master
 pkg/printers
-pkg/printers/internalversion
 pkg/probe/http
 pkg/proxy/healthcheck
 pkg/proxy/iptables
@@ -75,8 +73,6 @@ pkg/volume/util/fsquota/common
 pkg/volume/util/operationexecutor
 pkg/volume/util/subpath
 pkg/volume/vsphere_volume
-plugin/pkg/admission/imagepolicy
-plugin/pkg/admission/podnodeselector
 test/e2e/apimachinery
 test/e2e/apps
 test/e2e/auth
@@ -85,10 +81,8 @@ test/e2e/common
 test/e2e/instrumentation/logging/stackdriver
 test/e2e/instrumentation/monitoring
 test/e2e/lifecycle
-test/e2e/lifecycle/bootstrap
 test/e2e/manifest
 test/e2e/network
-test/e2e/node
 test/e2e/storage
 test/e2e/storage/drivers
 test/e2e/storage/testsuites

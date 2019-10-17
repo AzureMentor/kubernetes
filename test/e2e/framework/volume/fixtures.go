@@ -90,6 +90,22 @@ const (
 	iSCSIIQNTemplate = "iqn.2003-01.io.k8s:e2e.%s"
 )
 
+// SizeRange encapsulates a range of sizes specified as minimum and maximum quantity strings
+// Both values are optional.
+// If size is not set, it will assume there's not limitation and it may set a very small size (E.g. 1ki)
+// as Min and set a considerable big size(E.g. 10Ei) as Max, which make it possible to calculate
+// the intersection of given intervals (if it exists)
+type SizeRange struct {
+	// Max quantity specified as a string including units. E.g "3Gi".
+	// If the Max size is unset, It will be assign a default valid maximum size 10Ei,
+	// which is defined in test/e2e/storage/testsuites/base.go
+	Max string
+	// Min quantity specified as a string including units. E.g "1Gi"
+	// If the Min size is unset, It will be assign a default valid minimum size 1Ki,
+	// which is defined in test/e2e/storage/testsuites/base.go
+	Min string
+}
+
 // TestConfig is a struct for configuration of one tests. The test consist of:
 // - server pod - runs serverImage, exports ports[]
 // - client pod - does not need any special configuration
@@ -507,7 +523,7 @@ func testVolumeContent(client clientset.Interface, pod *v1.Pod, fsGroup *int64, 
 		if test.Mode == v1.PersistentVolumeBlock {
 			// Block: check content
 			deviceName := fmt.Sprintf("/opt/%d", i)
-			commands := GenerateReadBlockCmd(deviceName, len(test.ExpectedContent))
+			commands := generateReadBlockCmd(deviceName, len(test.ExpectedContent))
 			_, err := framework.LookForStringInPodExec(pod.Namespace, pod.Name, commands, test.ExpectedContent, time.Minute)
 			framework.ExpectNoError(err, "failed: finding the contents of the block device %s.", deviceName)
 
@@ -516,7 +532,7 @@ func testVolumeContent(client clientset.Interface, pod *v1.Pod, fsGroup *int64, 
 		} else {
 			// Filesystem: check content
 			fileName := fmt.Sprintf("/opt/%d/%s", i, test.File)
-			commands := GenerateReadFileCmd(fileName)
+			commands := generateReadFileCmd(fileName)
 			_, err := framework.LookForStringInPodExec(pod.Namespace, pod.Name, commands, test.ExpectedContent, time.Minute)
 			framework.ExpectNoError(err, "failed: finding the contents of the mounted file %s.", fileName)
 
@@ -577,12 +593,12 @@ func InjectContent(client clientset.Interface, config TestConfig, fsGroup *int64
 		if test.Mode == v1.PersistentVolumeBlock {
 			// Block: write content
 			deviceName := fmt.Sprintf("/opt/%d", i)
-			commands = append(commands, GenerateWriteBlockCmd(test.ExpectedContent, deviceName)...)
+			commands = append(commands, generateWriteBlockCmd(test.ExpectedContent, deviceName)...)
 
 		} else {
 			// Filesystem: write content
 			fileName := fmt.Sprintf("/opt/%d/%s", i, test.File)
-			commands = append(commands, GenerateWriteFileCmd(test.ExpectedContent, fileName)...)
+			commands = append(commands, generateWriteFileCmd(test.ExpectedContent, fileName)...)
 		}
 		out, err := framework.RunKubectl(commands...)
 		framework.ExpectNoError(err, "failed: writing the contents: %s", out)
@@ -618,9 +634,9 @@ func GenerateScriptCmd(command string) []string {
 	return commands
 }
 
-// GenerateWriteBlockCmd generates the corresponding command lines to write to a block device the given content.
+// generateWriteBlockCmd generates the corresponding command lines to write to a block device the given content.
 // Depending on the Node OS is Windows or linux, the command will use powershell or /bin/sh
-func GenerateWriteBlockCmd(content, fullPath string) []string {
+func generateWriteBlockCmd(content, fullPath string) []string {
 	var commands []string
 	if !framework.NodeOSDistroIs("windows") {
 		commands = []string{"/bin/sh", "-c", "echo '" + content + "' > " + fullPath}
@@ -630,9 +646,9 @@ func GenerateWriteBlockCmd(content, fullPath string) []string {
 	return commands
 }
 
-// GenerateWriteFileCmd generates the corresponding command lines to write a file with the given content and file path.
+// generateWriteFileCmd generates the corresponding command lines to write a file with the given content and file path.
 // Depending on the Node OS is Windows or linux, the command will use powershell or /bin/sh
-func GenerateWriteFileCmd(content, fullPath string) []string {
+func generateWriteFileCmd(content, fullPath string) []string {
 	var commands []string
 	if !framework.NodeOSDistroIs("windows") {
 		commands = []string{"/bin/sh", "-c", "echo '" + content + "' > " + fullPath}
@@ -642,9 +658,9 @@ func GenerateWriteFileCmd(content, fullPath string) []string {
 	return commands
 }
 
-// GenerateReadFileCmd generates the corresponding command lines to read from a file with the given file path.
+// generateReadFileCmd generates the corresponding command lines to read from a file with the given file path.
 // Depending on the Node OS is Windows or linux, the command will use powershell or /bin/sh
-func GenerateReadFileCmd(fullPath string) []string {
+func generateReadFileCmd(fullPath string) []string {
 	var commands []string
 	if !framework.NodeOSDistroIs("windows") {
 		commands = []string{"cat", fullPath}
@@ -654,9 +670,9 @@ func GenerateReadFileCmd(fullPath string) []string {
 	return commands
 }
 
-// GenerateReadBlockCmd generates the corresponding command lines to read from a block device with the given file path.
+// generateReadBlockCmd generates the corresponding command lines to read from a block device with the given file path.
 // Depending on the Node OS is Windows or linux, the command will use powershell or /bin/sh
-func GenerateReadBlockCmd(fullPath string, numberOfCharacters int) []string {
+func generateReadBlockCmd(fullPath string, numberOfCharacters int) []string {
 	var commands []string
 	if !framework.NodeOSDistroIs("windows") {
 		commands = []string{"head", "-c", strconv.Itoa(numberOfCharacters), fullPath}

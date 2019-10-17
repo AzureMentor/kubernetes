@@ -17,6 +17,7 @@ limitations under the License.
 package core
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
@@ -161,7 +162,7 @@ func (fp *FakeFilterPlugin) reset() {
 
 // Filter is a test function that returns an error or nil, depending on the
 // value of "failedNodeReturnCodeMap".
-func (fp *FakeFilterPlugin) Filter(state *framework.CycleState, pod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
+func (fp *FakeFilterPlugin) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	atomic.AddInt32(&fp.numFilterCalled, 1)
 
 	if returnCode, ok := fp.failedNodeReturnCodeMap[nodeInfo.Node().Name]; ok {
@@ -674,7 +675,7 @@ func TestGenericScheduler(t *testing.T) {
 				false,
 				schedulerapi.DefaultPercentageOfNodesToScore,
 				false)
-			result, err := scheduler.Schedule(framework.NewCycleState(), test.pod)
+			result, err := scheduler.Schedule(context.Background(), framework.NewCycleState(), test.pod)
 			if !reflect.DeepEqual(err, test.wErr) {
 				t.Errorf("Unexpected error: %v, expected: %v", err.Error(), test.wErr)
 			}
@@ -719,7 +720,7 @@ func TestFindFitAllError(t *testing.T) {
 	nodes := makeNodeList([]string{"3", "2", "1"})
 	scheduler := makeScheduler(predicates, nodes)
 
-	_, predicateMap, _, err := scheduler.findNodesThatFit(nil, &v1.Pod{})
+	_, predicateMap, _, err := scheduler.findNodesThatFit(context.Background(), framework.NewCycleState(), &v1.Pod{})
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -749,7 +750,7 @@ func TestFindFitSomeError(t *testing.T) {
 	scheduler := makeScheduler(predicates, nodes)
 
 	pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "1", UID: types.UID("1")}}
-	_, predicateMap, _, err := scheduler.findNodesThatFit(nil, pod)
+	_, predicateMap, _, err := scheduler.findNodesThatFit(context.Background(), framework.NewCycleState(), pod)
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -830,7 +831,7 @@ func TestFindFitPredicateCallCounts(t *testing.T) {
 		cache.UpdateNodeInfoSnapshot(scheduler.nodeInfoSnapshot)
 		queue.UpdateNominatedPodForNode(&v1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("nominated")}, Spec: v1.PodSpec{Priority: &midPriority}}, "1")
 
-		_, _, _, err := scheduler.findNodesThatFit(nil, test.pod)
+		_, _, _, err := scheduler.findNodesThatFit(context.Background(), framework.NewCycleState(), test.pod)
 
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -946,7 +947,7 @@ func TestZeroRequest(t *testing.T) {
 				{Spec: large1}, {Spec: noResources1},
 				{Spec: large2}, {Spec: small2},
 			},
-			expectedScore: 25,
+			expectedScore: 250,
 		},
 		{
 			pod:   &v1.Pod{Spec: small},
@@ -956,7 +957,7 @@ func TestZeroRequest(t *testing.T) {
 				{Spec: large1}, {Spec: noResources1},
 				{Spec: large2}, {Spec: small2},
 			},
-			expectedScore: 25,
+			expectedScore: 250,
 		},
 		// The point of this test is to verify that we're not just getting the same score no matter what we schedule.
 		{
@@ -967,7 +968,7 @@ func TestZeroRequest(t *testing.T) {
 				{Spec: large1}, {Spec: noResources1},
 				{Spec: large2}, {Spec: small2},
 			},
-			expectedScore: 23,
+			expectedScore: 230,
 		},
 	}
 
@@ -998,8 +999,9 @@ func TestZeroRequest(t *testing.T) {
 			metaData := metaDataProducer(test.pod, nodeNameToInfo)
 
 			list, err := PrioritizeNodes(
+				context.Background(),
 				test.pod, nodeNameToInfo, metaData, priorityConfigs,
-				schedulertesting.FakeNodeLister(test.nodes), []algorithm.SchedulerExtender{}, emptyFramework, nil)
+				test.nodes, []algorithm.SchedulerExtender{}, emptyFramework, framework.NewCycleState())
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -1427,7 +1429,7 @@ func TestSelectNodesForPreemption(t *testing.T) {
 			newnode.ObjectMeta.Labels = map[string]string{"hostname": "newnode"}
 			nodes = append(nodes, newnode)
 			state := framework.NewCycleState()
-			nodeToPods, err := g.selectNodesForPreemption(state, test.pod, nodeNameToInfo, nodes, test.predicates, PredicateMetadata, nil, nil)
+			nodeToPods, err := g.selectNodesForPreemption(context.Background(), state, test.pod, nodeNameToInfo, nodes, test.predicates, PredicateMetadata, nil, nil)
 			if err != nil {
 				t.Error(err)
 			}
@@ -1651,7 +1653,7 @@ func TestPickOneNodeForPreemption(t *testing.T) {
 			}
 			nodeNameToInfo := schedulernodeinfo.CreateNodeNameToInfoMap(test.pods, nodes)
 			state := framework.NewCycleState()
-			candidateNodes, _ := g.selectNodesForPreemption(state, test.pod, nodeNameToInfo, nodes, test.predicates, PredicateMetadata, nil, nil)
+			candidateNodes, _ := g.selectNodesForPreemption(context.Background(), state, test.pod, nodeNameToInfo, nodes, test.predicates, PredicateMetadata, nil, nil)
 			node := pickOneNodeForPreemption(candidateNodes)
 			found := false
 			for _, nodeName := range test.expected {
@@ -1795,7 +1797,7 @@ func TestNodesWherePreemptionMightHelp(t *testing.T) {
 				FailedPredicates:      test.failedPredMap,
 				FilteredNodesStatuses: test.nodesStatuses,
 			}
-			nodes := nodesWherePreemptionMightHelp(makeNodeList(nodeNames), &fitErr)
+			nodes := nodesWherePreemptionMightHelp(schedulernodeinfo.CreateNodeNameToInfoMap(nil, makeNodeList(nodeNames)), &fitErr)
 			if len(test.expected) != len(nodes) {
 				t.Errorf("number of nodes is not the same as expected. exptectd: %d, got: %d. Nodes: %v", len(test.expected), len(nodes), nodes)
 			}
@@ -2142,7 +2144,7 @@ func TestPreempt(t *testing.T) {
 			if test.failedPredMap != nil {
 				failedPredMap = test.failedPredMap
 			}
-			node, victims, _, err := scheduler.Preempt(state, test.pod, error(&FitError{Pod: test.pod, FailedPredicates: failedPredMap}))
+			node, victims, _, err := scheduler.Preempt(context.Background(), state, test.pod, error(&FitError{Pod: test.pod, FailedPredicates: failedPredMap}))
 			if err != nil {
 				t.Errorf("unexpected error in preemption: %v", err)
 			}
@@ -2172,7 +2174,7 @@ func TestPreempt(t *testing.T) {
 				test.pod.Status.NominatedNodeName = node.Name
 			}
 			// Call preempt again and make sure it doesn't preempt any more pods.
-			node, victims, _, err = scheduler.Preempt(state, test.pod, error(&FitError{Pod: test.pod, FailedPredicates: failedPredMap}))
+			node, victims, _, err = scheduler.Preempt(context.Background(), state, test.pod, error(&FitError{Pod: test.pod, FailedPredicates: failedPredMap}))
 			if err != nil {
 				t.Errorf("unexpected error in preemption: %v", err)
 			}

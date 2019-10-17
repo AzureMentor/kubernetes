@@ -41,6 +41,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
+	"k8s.io/component-base/logs"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/component-base/version"
 	"k8s.io/component-base/version/verflag"
@@ -51,7 +52,6 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	"k8s.io/kubernetes/pkg/scheduler/algorithmprovider"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
-	plugins "k8s.io/kubernetes/pkg/scheduler/framework/plugins"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	"k8s.io/kubernetes/pkg/util/configz"
@@ -136,7 +136,6 @@ func runCommand(cmd *cobra.Command, args []string, opts *options.Options, regist
 		os.Exit(1)
 	}
 
-	stopCh := make(chan struct{})
 	// Get the completed config
 	cc := c.Complete()
 
@@ -151,45 +150,41 @@ func runCommand(cmd *cobra.Command, args []string, opts *options.Options, regist
 		return fmt.Errorf("unable to register configz: %s", err)
 	}
 
-	return Run(cc, stopCh, registryOptions...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	return Run(ctx, cc, registryOptions...)
 }
 
-// Run executes the scheduler based on the given configuration. It only return on error or when stopCh is closed.
-func Run(cc schedulerserverconfig.CompletedConfig, stopCh <-chan struct{}, registryOptions ...Option) error {
+// Run executes the scheduler based on the given configuration. It only returns on error or when context is done.
+func Run(ctx context.Context, cc schedulerserverconfig.CompletedConfig, registryOptions ...Option) error {
 	// To help debugging, immediately log version
 	klog.V(1).Infof("Starting Kubernetes Scheduler version %+v", version.Get())
 
-	registry := plugins.NewDefaultRegistry()
+	outOfTreeRegistry := make(framework.Registry)
 	for _, option := range registryOptions {
-		if err := option(registry); err != nil {
+		if err := option(outOfTreeRegistry); err != nil {
 			return err
 		}
 	}
 
 	// Create the scheduler.
 	sched, err := scheduler.New(cc.Client,
-		cc.InformerFactory.Core().V1().Nodes(),
+		cc.InformerFactory,
 		cc.PodInformer,
-		cc.InformerFactory.Core().V1().PersistentVolumes(),
-		cc.InformerFactory.Core().V1().PersistentVolumeClaims(),
-		cc.InformerFactory.Core().V1().ReplicationControllers(),
-		cc.InformerFactory.Apps().V1().ReplicaSets(),
-		cc.InformerFactory.Apps().V1().StatefulSets(),
-		cc.InformerFactory.Core().V1().Services(),
-		cc.InformerFactory.Policy().V1beta1().PodDisruptionBudgets(),
-		cc.InformerFactory.Storage().V1().StorageClasses(),
-		cc.InformerFactory.Storage().V1beta1().CSINodes(),
 		cc.Recorder,
 		cc.ComponentConfig.AlgorithmSource,
-		stopCh,
+		ctx.Done(),
 		scheduler.WithName(cc.ComponentConfig.SchedulerName),
 		scheduler.WithHardPodAffinitySymmetricWeight(cc.ComponentConfig.HardPodAffinitySymmetricWeight),
 		scheduler.WithPreemptionDisabled(cc.ComponentConfig.DisablePreemption),
 		scheduler.WithPercentageOfNodesToScore(cc.ComponentConfig.PercentageOfNodesToScore),
 		scheduler.WithBindTimeoutSeconds(*cc.ComponentConfig.BindTimeoutSeconds),
-		scheduler.WithFrameworkRegistry(registry),
+		scheduler.WithFrameworkOutOfTreeRegistry(outOfTreeRegistry),
 		scheduler.WithFrameworkPlugins(cc.ComponentConfig.Plugins),
 		scheduler.WithFrameworkPluginConfig(cc.ComponentConfig.PluginConfig),
+		scheduler.WithPodMaxBackoffSeconds(*cc.ComponentConfig.PodMaxBackoffSeconds),
+		scheduler.WithPodInitialBackoffSeconds(*cc.ComponentConfig.PodInitialBackoffSeconds),
 	)
 	if err != nil {
 		return err
@@ -197,7 +192,7 @@ func Run(cc schedulerserverconfig.CompletedConfig, stopCh <-chan struct{}, regis
 
 	// Prepare the event broadcaster.
 	if cc.Broadcaster != nil && cc.EventClient != nil {
-		cc.Broadcaster.StartRecordingToSink(stopCh)
+		cc.Broadcaster.StartRecordingToSink(ctx.Done())
 	}
 	if cc.LeaderElectionBroadcaster != nil && cc.CoreEventClient != nil {
 		cc.LeaderElectionBroadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: cc.CoreEventClient.Events("")})
@@ -212,53 +207,36 @@ func Run(cc schedulerserverconfig.CompletedConfig, stopCh <-chan struct{}, regis
 	if cc.InsecureServing != nil {
 		separateMetrics := cc.InsecureMetricsServing != nil
 		handler := buildHandlerChain(newHealthzHandler(&cc.ComponentConfig, separateMetrics, checks...), nil, nil)
-		if err := cc.InsecureServing.Serve(handler, 0, stopCh); err != nil {
+		if err := cc.InsecureServing.Serve(handler, 0, ctx.Done()); err != nil {
 			return fmt.Errorf("failed to start healthz server: %v", err)
 		}
 	}
 	if cc.InsecureMetricsServing != nil {
 		handler := buildHandlerChain(newMetricsHandler(&cc.ComponentConfig), nil, nil)
-		if err := cc.InsecureMetricsServing.Serve(handler, 0, stopCh); err != nil {
+		if err := cc.InsecureMetricsServing.Serve(handler, 0, ctx.Done()); err != nil {
 			return fmt.Errorf("failed to start metrics server: %v", err)
 		}
 	}
 	if cc.SecureServing != nil {
 		handler := buildHandlerChain(newHealthzHandler(&cc.ComponentConfig, false, checks...), cc.Authentication.Authenticator, cc.Authorization.Authorizer)
 		// TODO: handle stoppedCh returned by c.SecureServing.Serve
-		if _, err := cc.SecureServing.Serve(handler, 0, stopCh); err != nil {
+		if _, err := cc.SecureServing.Serve(handler, 0, ctx.Done()); err != nil {
 			// fail early for secure handlers, removing the old error loop from above
 			return fmt.Errorf("failed to start secure server: %v", err)
 		}
 	}
 
 	// Start all informers.
-	go cc.PodInformer.Informer().Run(stopCh)
-	cc.InformerFactory.Start(stopCh)
+	go cc.PodInformer.Informer().Run(ctx.Done())
+	cc.InformerFactory.Start(ctx.Done())
 
 	// Wait for all caches to sync before scheduling.
-	cc.InformerFactory.WaitForCacheSync(stopCh)
-
-	// Prepare a reusable runCommand function.
-	run := func(ctx context.Context) {
-		sched.Run()
-		<-ctx.Done()
-	}
-
-	ctx, cancel := context.WithCancel(context.TODO()) // TODO once Run() accepts a context, it should be used here
-	defer cancel()
-
-	go func() {
-		select {
-		case <-stopCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	cc.InformerFactory.WaitForCacheSync(ctx.Done())
 
 	// If leader election is enabled, runCommand via LeaderElector until done and exit.
 	if cc.LeaderElection != nil {
 		cc.LeaderElection.Callbacks = leaderelection.LeaderCallbacks{
-			OnStartedLeading: run,
+			OnStartedLeading: sched.Run,
 			OnStoppedLeading: func() {
 				klog.Fatalf("leaderelection lost")
 			},
@@ -274,7 +252,7 @@ func Run(cc schedulerserverconfig.CompletedConfig, stopCh <-chan struct{}, regis
 	}
 
 	// Leader election is disabled, so runCommand inline until done.
-	run(ctx)
+	sched.Run(ctx)
 	return fmt.Errorf("finished without leader elect")
 }
 
@@ -317,6 +295,7 @@ func newMetricsHandler(config *kubeschedulerconfig.KubeSchedulerConfiguration) h
 		if config.EnableContentionProfiling {
 			goruntime.SetBlockProfileRate(1)
 		}
+		routes.DebugFlags{}.Install(pathRecorderMux, "v", routes.StringFlagPutHandler(logs.GlogSetter))
 	}
 	return pathRecorderMux
 }
@@ -335,6 +314,7 @@ func newHealthzHandler(config *kubeschedulerconfig.KubeSchedulerConfiguration, s
 		if config.EnableContentionProfiling {
 			goruntime.SetBlockProfileRate(1)
 		}
+		routes.DebugFlags{}.Install(pathRecorderMux, "v", routes.StringFlagPutHandler(logs.GlogSetter))
 	}
 	return pathRecorderMux
 }

@@ -17,6 +17,7 @@ limitations under the License.
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -148,17 +149,17 @@ func (sp *ScorePlugin) reset() {
 }
 
 // Score returns the score of scheduling a pod on a specific node.
-func (sp *ScorePlugin) Score(state *framework.CycleState, p *v1.Pod, nodeName string) (int, *framework.Status) {
+func (sp *ScorePlugin) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
 	sp.numScoreCalled++
 	if sp.failScore {
 		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", p.Name))
 	}
 
-	score := 1
+	score := int64(1)
 	if sp.numScoreCalled == 1 {
 		// The first node is scored the highest, the rest is scored lower.
 		sp.highScoreNode = nodeName
-		score = int(framework.MaxNodeScore)
+		score = framework.MaxNodeScore
 	}
 	return score, nil
 }
@@ -179,13 +180,13 @@ func (sp *ScoreWithNormalizePlugin) reset() {
 }
 
 // Score returns the score of scheduling a pod on a specific node.
-func (sp *ScoreWithNormalizePlugin) Score(state *framework.CycleState, p *v1.Pod, nodeName string) (int, *framework.Status) {
+func (sp *ScoreWithNormalizePlugin) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
 	sp.numScoreCalled++
-	score := 10
+	score := int64(10)
 	return score, nil
 }
 
-func (sp *ScoreWithNormalizePlugin) NormalizeScore(state *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+func (sp *ScoreWithNormalizePlugin) NormalizeScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
 	sp.numNormalizeScoreCalled++
 	return nil
 }
@@ -207,7 +208,7 @@ func (fp *FilterPlugin) reset() {
 
 // Filter is a test function that returns an error or nil, depending on the
 // value of "failFilter".
-func (fp *FilterPlugin) Filter(state *framework.CycleState, pod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
+func (fp *FilterPlugin) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) *framework.Status {
 	fp.numFilterCalled++
 
 	if fp.failFilter {
@@ -224,7 +225,7 @@ func (rp *ReservePlugin) Name() string {
 
 // Reserve is a test function that returns an error or nil, depending on the
 // value of "failReserve".
-func (rp *ReservePlugin) Reserve(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+func (rp *ReservePlugin) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	rp.numReserveCalled++
 	if rp.failReserve {
 		return framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", pod.Name))
@@ -243,7 +244,7 @@ func (*PostFilterPlugin) Name() string {
 }
 
 // PostFilter is a test function.
-func (pfp *PostFilterPlugin) PostFilter(_ *framework.CycleState, pod *v1.Pod, _ []*v1.Node, _ framework.NodeToStatusMap) *framework.Status {
+func (pfp *PostFilterPlugin) PostFilter(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, _ []*v1.Node, _ framework.NodeToStatusMap) *framework.Status {
 	pfp.numPostFilterCalled++
 	if pfp.failPostFilter {
 		return framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", pod.Name))
@@ -264,7 +265,7 @@ func (pp *PreBindPlugin) Name() string {
 }
 
 // PreBind is a test function that returns (true, nil) or errors for testing.
-func (pp *PreBindPlugin) PreBind(state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+func (pp *PreBindPlugin) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 	pp.numPreBindCalled++
 	if pp.failPreBind {
 		return framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", pod.Name))
@@ -288,7 +289,7 @@ func (bp *BindPlugin) Name() string {
 	return bp.PluginName
 }
 
-func (bp *BindPlugin) Bind(state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
+func (bp *BindPlugin) Bind(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
 	bp.numBindCalled++
 	if bp.pluginInvokeEventChan != nil {
 		bp.pluginInvokeEventChan <- pluginInvokeEvent{pluginName: bp.Name(), val: bp.numBindCalled}
@@ -318,7 +319,7 @@ func (pp *PostBindPlugin) Name() string {
 }
 
 // PostBind is a test function, which counts the number of times called.
-func (pp *PostBindPlugin) PostBind(state *framework.CycleState, pod *v1.Pod, nodeName string) {
+func (pp *PostBindPlugin) PostBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
 	pp.numPostBindCalled++
 	if pp.pluginInvokeEventChan != nil {
 		pp.pluginInvokeEventChan <- pluginInvokeEvent{pluginName: pp.Name(), val: pp.numPostBindCalled}
@@ -341,7 +342,7 @@ func (pp *PreFilterPlugin) PreFilterExtensions() framework.PreFilterExtensions {
 }
 
 // PreFilter is a test function that returns (true, nil) or errors for testing.
-func (pp *PreFilterPlugin) PreFilter(state *framework.CycleState, pod *v1.Pod) *framework.Status {
+func (pp *PreFilterPlugin) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) *framework.Status {
 	pp.numPreFilterCalled++
 	if pp.failPreFilter {
 		return framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", pod.Name))
@@ -366,7 +367,7 @@ func (up *UnreservePlugin) Name() string {
 
 // Unreserve is a test function that returns an error or nil, depending on the
 // value of "failUnreserve".
-func (up *UnreservePlugin) Unreserve(state *framework.CycleState, pod *v1.Pod, nodeName string) {
+func (up *UnreservePlugin) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
 	up.numUnreserveCalled++
 	if up.pluginInvokeEventChan != nil {
 		up.pluginInvokeEventChan <- pluginInvokeEvent{pluginName: up.Name(), val: up.numUnreserveCalled}
@@ -384,7 +385,7 @@ func (pp *PermitPlugin) Name() string {
 }
 
 // Permit implements the permit test plugin.
-func (pp *PermitPlugin) Permit(state *framework.CycleState, pod *v1.Pod, nodeName string) (*framework.Status, time.Duration) {
+func (pp *PermitPlugin) Permit(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (*framework.Status, time.Duration) {
 	pp.numPermitCalled++
 	if pp.failPermit {
 		return framework.NewStatus(framework.Error, fmt.Sprintf("injecting failure for pod %v", pod.Name)), 0
@@ -461,7 +462,7 @@ func TestPreFilterPlugin(t *testing.T) {
 	// Create the master and the scheduler with the test plugin set.
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "prefilter-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -532,7 +533,7 @@ func TestScorePlugin(t *testing.T) {
 
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "score-plugin", nil), 10,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	for i, fail := range []bool{false, true} {
@@ -590,7 +591,7 @@ func TestNormalizeScorePlugin(t *testing.T) {
 	}
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "score-plugin", nil), 10,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 
 	defer cleanupTest(t, context)
 
@@ -635,7 +636,7 @@ func TestReservePlugin(t *testing.T) {
 	// Create the master and the scheduler with the test plugin set.
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "reserve-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	for _, fail := range []bool{false, true} {
@@ -694,7 +695,7 @@ func TestPrebindPlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "prebind-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(preBindPluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -789,7 +790,7 @@ func TestUnreservePlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "unreserve-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -899,7 +900,7 @@ func TestBindPlugin(t *testing.T) {
 	context := initTestSchedulerWithOptions(t, testContext, false, nil, time.Second,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry),
+		scheduler.WithFrameworkDefaultRegistry(registry),
 		scheduler.WithFrameworkConfigProducerRegistry(nil))
 	defer cleanupTest(t, context)
 
@@ -1072,7 +1073,7 @@ func TestPostBindPlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "postbind-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -1147,7 +1148,7 @@ func TestPermitPlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "permit-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -1253,7 +1254,7 @@ func TestCoSchedulingWithPermitPlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "permit-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	tests := []struct {
@@ -1334,7 +1335,7 @@ func TestFilterPlugin(t *testing.T) {
 	// Create the master and the scheduler with the test plugin set.
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "filter-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	for _, fail := range []bool{false, true} {
@@ -1385,7 +1386,7 @@ func TestPostFilterPlugin(t *testing.T) {
 	// Create the master and the scheduler with the test plugin set.
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "post-filter-plugin", nil), 2,
 		scheduler.WithFrameworkPlugins(plugins),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	for _, fail := range []bool{false, true} {
@@ -1444,7 +1445,7 @@ func TestPreemptWithPermitPlugin(t *testing.T) {
 	context := initTestSchedulerForFrameworkTest(t, initTestMaster(t, "preempt-with-permit-plugin", nil), 0,
 		scheduler.WithFrameworkPlugins(plugins),
 		scheduler.WithFrameworkPluginConfig(pluginConfig),
-		scheduler.WithFrameworkRegistry(registry))
+		scheduler.WithFrameworkDefaultRegistry(registry))
 	defer cleanupTest(t, context)
 
 	// Add one node.
